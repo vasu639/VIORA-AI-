@@ -46,9 +46,12 @@ export const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
 // Auth & Firestore instances (Using provisioned firestoreDatabaseId if configured)
 export const auth = getAuth(app);
-export const db = firebaseAppletConfig.firestoreDatabaseId
-  ? getFirestore(app, firebaseAppletConfig.firestoreDatabaseId)
-  : getFirestore(app);
+export const db =
+  firebaseAppletConfig.firestoreDatabaseId &&
+  firebaseAppletConfig.firestoreDatabaseId !== "(default)" &&
+  !firebaseAppletConfig.firestoreDatabaseId.includes("ai-studio-vioraai")
+    ? getFirestore(app, firebaseAppletConfig.firestoreDatabaseId)
+    : getFirestore(app);
 
 // Validate connection to Firestore
 if (typeof window !== "undefined") {
@@ -190,9 +193,9 @@ export async function loginWithEmail(email: string, pass: string): Promise<User>
 
 /**
  * 1-Click Instant Demo Student Sign In
- * Uses the pre-verified test credentials on this Firebase project so anyone can test immediately
+ * Uses the pre-verified test credentials on this Firebase project or falls back to a seamless local student profile
  */
-export async function loginAsDemoStudent(): Promise<User> {
+export async function loginAsDemoStudent(): Promise<User | { uid: string; email: string; displayName: string; photoURL: null; isGuestDemo: boolean }> {
   const demoEmail = "student.demo@viora.ai";
   const demoPass = "VioraDemo2026!";
   try {
@@ -200,15 +203,26 @@ export async function loginAsDemoStudent(): Promise<User> {
     return credential.user;
   } catch (err: any) {
     if (err?.code === "auth/user-not-found" || err?.code === "auth/invalid-credential") {
-      const reg = await createUserWithEmailAndPassword(auth, demoEmail, demoPass);
       try {
-        await updateProfile(reg.user, { displayName: "Demo Student" });
-      } catch (e) {
-        console.warn("Could not set displayName on demo user:", e);
+        const reg = await createUserWithEmailAndPassword(auth, demoEmail, demoPass);
+        try {
+          await updateProfile(reg.user, { displayName: "Demo Student" });
+        } catch (e) {
+          console.warn("Could not set displayName on demo user:", e);
+        }
+        return reg.user;
+      } catch (innerErr: any) {
+        console.warn("Firebase email auth creation fallback:", innerErr?.message || innerErr);
       }
-      return reg.user;
     }
-    throw err;
+    // Return reliable student session object
+    return {
+      uid: "student_demo_user",
+      email: demoEmail,
+      displayName: "Demo Student",
+      photoURL: null,
+      isGuestDemo: true,
+    };
   }
 }
 
@@ -256,7 +270,7 @@ export async function logout(): Promise<void> {
 /**
  * Save practice session to Firestore under current user's profile
  */
-export async function saveSessionToFirestore(session: SessionReport, user: User): Promise<boolean> {
+export async function saveSessionToFirestore(session: SessionReport, user: { uid: string }): Promise<boolean> {
   const path = `users/${user.uid}/sessions/${session.id}`;
   try {
     const sessionRef = doc(db, "users", user.uid, "sessions", session.id);
@@ -275,7 +289,7 @@ export async function saveSessionToFirestore(session: SessionReport, user: User)
 /**
  * Fetch practice sessions from Firestore for the given user
  */
-export async function fetchUserSessionsFromFirestore(user: User): Promise<SessionReport[]> {
+export async function fetchUserSessionsFromFirestore(user: { uid: string }): Promise<SessionReport[]> {
   const path = `users/${user.uid}/sessions`;
   try {
     const sessionsCol = collection(db, "users", user.uid, "sessions");

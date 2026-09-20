@@ -1,6 +1,11 @@
 {
   "name": "Viora AI",
   "description": "AI-powered viva and interview oral examination practice tool grounded in your uploaded syllabus or resume.",
-  "requestFramePermissions": ["camera", "microphone"],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

@@ -29,7 +29,7 @@ import {
 import { VioraLogo } from "./VioraLogo";
 
 export const AuthModal: React.FC = () => {
-  const { authModalOpen, authModalMode, closeAuthModal, openAuthModal } = useAuth();
+  const { authModalOpen, authModalMode, closeAuthModal, openAuthModal, loginAsGuestStudent } = useAuth();
 
   const [mode, setMode] = useState<"login" | "signup" | "forgot">(
     authModalMode === "signup" ? "signup" : "login"
@@ -190,10 +190,15 @@ export const AuthModal: React.FC = () => {
     setSuccessMsg(null);
     setDemoLoading(true);
     try {
-      await loginAsDemoStudent();
+      const demoResult = await loginAsDemoStudent();
+      if ((demoResult as any)?.isGuestDemo) {
+        loginAsGuestStudent("Demo Student");
+      }
       closeAuthModal();
     } catch (err: any) {
-      setError(parseFirebaseError(err));
+      console.warn("Falling back to local student session:", err);
+      loginAsGuestStudent("Demo Student");
+      closeAuthModal();
     } finally {
       setDemoLoading(false);
     }
@@ -293,47 +298,95 @@ export const AuthModal: React.FC = () => {
 
           {/* Specific Firebase Domain Authorization Guide Card */}
           {authErrorCode === "auth/unauthorized-domain" && (
-            <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 text-amber-900 dark:text-amber-200 space-y-2.5 text-xs">
-              <div className="flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <div>
-                  <h4 className="font-bold text-amber-950 dark:text-amber-200">Firebase Domain Authorization Required</h4>
-                  <p className="text-[11px] text-amber-800 dark:text-amber-300 mt-0.5 leading-relaxed">
-                    Firebase requires this Cloud Run preview domain to be registered under <strong>Authorized domains</strong> before Google Sign-In can open.
-                  </p>
+            <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 text-amber-900 dark:text-amber-200 space-y-3 text-xs">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-start gap-2.5">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                  <div>
+                    <h4 className="font-bold text-amber-950 dark:text-amber-100 text-xs">
+                      1-Step Action: Authorize Domain for Google Sign-In
+                    </h4>
+                    <p className="text-[11px] text-amber-800 dark:text-amber-300 mt-0.5 leading-relaxed">
+                      Google OAuth requires your Cloud Run domain to be added to <strong>Authorized domains</strong> in Firebase project <strong className="font-mono text-amber-900 dark:text-amber-200">{firebaseConfig.projectId}</strong>.
+                    </p>
+                  </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setAuthErrorCode(null)}
+                  className="text-amber-600 hover:text-amber-800 dark:text-amber-400 p-1 rounded hover:bg-amber-100 dark:hover:bg-amber-900/50 transition-colors"
+                  title="Dismiss warning"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
               </div>
 
-              <div className="bg-white/90 dark:bg-slate-900/90 p-2 rounded-lg border border-amber-200 dark:border-amber-900/60 flex items-center justify-between gap-2 text-[11px]">
-                <span className="font-mono truncate text-slate-700 dark:text-slate-300 select-all font-semibold">{currentHostname}</span>
+              {/* 3 Quick Steps */}
+              <div className="bg-amber-100/70 dark:bg-amber-950/60 p-2.5 rounded-lg border border-amber-200/80 dark:border-amber-900/50 space-y-1.5 text-[11px] text-amber-900 dark:text-amber-200">
+                <div className="font-semibold text-amber-950 dark:text-amber-100">How to authorize in 15 seconds:</div>
+                <ol className="list-decimal list-inside space-y-1 text-[11px] text-amber-800 dark:text-amber-300">
+                  <li>
+                    Click{" "}
+                    <a
+                      href={`https://console.firebase.google.com/project/${firebaseConfig.projectId}/authentication/settings`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-semibold text-blue-700 dark:text-blue-400 underline hover:text-blue-800"
+                    >
+                      Open Firebase Authorized Domains ↗
+                    </a>
+                  </li>
+                  <li>Scroll down to <strong>Authorized domains</strong> and click <strong>Add domain</strong>.</li>
+                  <li>Paste the domain below and click <strong>Save</strong>.</li>
+                </ol>
+              </div>
+
+              {/* Domain Copy Box */}
+              <div className="bg-white/95 dark:bg-slate-900/90 p-2 rounded-lg border border-amber-200 dark:border-amber-800/60 flex items-center justify-between gap-2 text-[11px]">
+                <span className="font-mono truncate text-slate-800 dark:text-slate-200 select-all font-semibold">
+                  {currentHostname}
+                </span>
                 <button
                   type="button"
                   onClick={handleCopyHostname}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-100 dark:bg-amber-900/60 hover:bg-amber-200 dark:hover:bg-amber-800/80 text-amber-800 dark:text-amber-200 font-semibold rounded shrink-0 transition-colors"
+                  className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-100 dark:bg-amber-900/60 hover:bg-amber-200 dark:hover:bg-amber-800/80 text-amber-900 dark:text-amber-200 font-semibold rounded shrink-0 transition-colors"
                 >
-                  {copiedDomain ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                  {copiedDomain ? <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" /> : <Copy className="w-3 h-3" />}
                   <span>{copiedDomain ? "Copied!" : "Copy Domain"}</span>
                 </button>
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-                <a
-                  href={`https://console.firebase.google.com/project/${firebaseConfig.projectId}/authentication/settings`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1 text-[11px] text-[#2F6FED] dark:text-blue-400 font-semibold hover:underline"
-                >
-                  <span>Open Firebase Settings</span>
-                  <ExternalLink className="w-3 h-3" />
-                </a>
+              {/* Action Buttons */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 pt-1">
+                {/* Instant Bypass Button */}
                 <button
                   type="button"
                   onClick={handleDemoSignIn}
-                  className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-950/70 hover:bg-emerald-200 dark:hover:bg-emerald-900/80 px-2.5 py-1 rounded-lg transition-colors"
+                  className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg shadow-xs transition-colors"
                 >
-                  <Zap className="w-3 h-3" />
-                  <span>Instant Student Sign-In</span>
+                  <Zap className="w-3.5 h-3.5 text-amber-300" />
+                  <span>Continue as Student (Bypass Setup)</span>
                 </button>
+
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={handleGoogleSignIn}
+                    disabled={googleLoading}
+                    className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white px-2.5 py-1 rounded bg-amber-100/60 dark:bg-amber-900/40 hover:bg-amber-200/70 transition-colors"
+                  >
+                    <span>Retry Google Sign-In</span>
+                  </button>
+                  <a
+                    href={`https://console.firebase.google.com/project/${firebaseConfig.projectId}/authentication/settings`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 text-[11px] text-blue-600 dark:text-blue-400 font-semibold hover:underline"
+                  >
+                    <span>Settings</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
               </div>
             </div>
           )}

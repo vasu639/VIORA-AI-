@@ -69,20 +69,31 @@ async function generateContentWithRetry(params: {
   throw lastError;
 }
 
-async function startServer() {
+export function createApiApp() {
   const app = express();
 
   // Allow larger payload for PDF base64 uploads (up to 30mb)
   app.use(express.json({ limit: "30mb" }));
   app.use(express.urlencoded({ extended: true, limit: "30mb" }));
 
+  // Netlify functions rewrite support (normalizes any prefix to /api/...)
+  app.use((req, _res, next) => {
+    if (req.url.startsWith("/.netlify/functions/api")) {
+      req.url = req.url.replace("/.netlify/functions/api", "");
+    }
+    if (!req.url.startsWith("/api") && req.url !== "" && req.url !== "/") {
+      req.url = "/api" + (req.url.startsWith("/") ? req.url : "/" + req.url);
+    }
+    next();
+  });
+
   // Health check
-  app.get("/api/health", (_req, res) => {
+  app.get(["/api/health", "/health"], (_req, res) => {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
   });
 
   // Generate Questions
-  app.post("/api/generate-questions", async (req, res) => {
+  app.post(["/api/generate-questions", "/generate-questions"], async (req, res) => {
     const { mode, subMode, courseName, level, numQuestions = 6, fileBase64, mimeType, textContent } = req.body;
 
     if (!fileBase64 && !textContent) {
@@ -794,6 +805,12 @@ Return ONLY valid JSON in this exact structure:
     }
   });
 
+  return app;
+}
+
+export async function startServer() {
+  const app = createApiApp();
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
@@ -814,4 +831,11 @@ Return ONLY valid JSON in this exact structure:
   });
 }
 
-startServer();
+// Only start the HTTP listener if executed directly (not when required as a serverless function)
+if (
+  process.env.NETLIFY !== "true" &&
+  !process.env.AWS_LAMBDA_FUNCTION_NAME &&
+  !process.env.LAMBDA_TASK_ROOT
+) {
+  startServer();
+}
