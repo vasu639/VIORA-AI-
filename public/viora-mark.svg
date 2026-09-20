@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="100%" height="100%">
+  <defs>
+    <filter id="icon-tile-shadow" x="-10%" y="-10%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#0F172A" flood-opacity="0.1" />
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#0F172A" flood-opacity="0.05" />
+    </filter>
+
+    <filter id="icon-blue-glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+
+    <linearGradient id="icon-tile-bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="100%" stop-color="#F8FAFC" />
+    </linearGradient>
+
+    <linearGradient id="icon-left-ribbon" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2D3748" />
+      <stop offset="50%" stop-color="#1A202C" />
+      <stop offset="100%" stop-color="#0D131F" />
+    </linearGradient>
+
+    <linearGradient id="icon-blue-glass" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#1D4ED8" />
+      <stop offset="35%" stop-color="#2563EB" />
+      <stop offset="70%" stop-color="#3B82F6" />
+      <stop offset="100%" stop-color="#93C5FD" />
+    </linearGradient>
+
+    <linearGradient id="icon-glass-specular" x1="20%" y1="0%" x2="80%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.9" />
+      <stop offset="50%" stop-color="#BAE6FD" stop-opacity="0.4" />
+      <stop offset="100%" stop-color="#0284C7" stop-opacity="0" />
+    </linearGradient>
+  </defs>
+
+  <!-- Squircle Base -->
+  <rect
+    x="12"
+    y="12"
+    width="232"
+    height="232"
+    rx="56"
+    ry="56"
+    fill="url(#icon-tile-bg)"
+    stroke="#E2E8F0"
+    stroke-width="1.5"
+    filter="url(#icon-tile-shadow)"
+  />
+
+  <!-- The 3D Ribbon V -->
+  <g transform="translate(8, 2)">
+    <!-- Crease / Bottom Under-Fold Loop -->
+    <path
+      d="M 103 148 C 111 166, 126 178, 142 170 C 151 166, 153 152, 142 140 C 133 130, 114 136, 103 148 Z"
+      fill="#0B132B"
+      opacity="0.95"
+    />
+
+    <!-- Left Wing (Matte Obsidian Ribbon) -->
+    <path
+      d="M 60 70 C 57 70, 55 73, 58 79 L 98 158 C 105 172, 120 180, 132 175 C 141 172, 147 162, 140 150 L 108 90 C 105 84, 99 77, 90 73 L 63 70 Z"
+      fill="url(#icon-left-ribbon)"
+    />
+
+    <!-- Left Wing Highlight Rim -->
+    <path
+      d="M 60 70 L 98 158 C 103 167, 112 174, 122 175"
+      fill="none"
+      stroke="#64748B"
+      stroke-width="1.5"
+      stroke-linecap="round"
+      opacity="0.7"
+    />
+
+    <!-- Right Wing (Luminous Ice Blue Glass Ribbon) -->
+    <path
+      d="M 121 172 C 134 176, 148 168, 154 156 L 196 82 C 200 75, 199 69, 192 69 C 185 69, 178 75, 172 85 L 138 146 C 132 156, 126 162, 117 166 L 121 172 Z"
+      fill="url(#icon-blue-glass)"
+      filter="url(#icon-blue-glow)"
+    />
+
+    <!-- Right Wing Glass Body Crisp Layer -->
+    <path
+      d="M 122 171 C 134 175, 147 167, 153 155 L 195 82 C 198 76, 197 70, 191 70 C 184 70, 178 76, 173 85 L 139 146 C 133 156, 127 162, 120 165 L 122 171 Z"
+      fill="url(#icon-blue-glass)"
+    />
+
+    <!-- Glass Specular Highlight -->
+    <path
+      d="M 170 88 L 191 75 C 193 73, 195 75, 193 79 L 160 140 C 154 150, 147 156, 138 158 L 170 88 Z"
+      fill="url(#icon-glass-specular)"
+    />
+
+    <!-- 4-Point Star Sparkle -->
+    <g transform="translate(202, 66)">
+      <path
+        d="M 0 -13 Q 0 0 -13 0 Q 0 0 0 13 Q 0 0 13 0 Q 0 0 0 -13 Z"
+        fill="#0284C7"
+      />
+      <path
+        d="M 0 -8 Q 0 0 -8 0 Q 0 0 0 8 Q 0 0 8 0 Q 0 0 0 -8 Z"
+        fill="#38BDF8"
+      />
+      <circle cx="0" cy="0" r="1.5" fill="#FFFFFF" />
+    </g>
+  </g>
+</svg>

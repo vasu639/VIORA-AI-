@@ -1,0 +1,210 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 480" width="100%" height="100%">
+  <defs>
+    <!-- Background Shadow -->
+    <filter id="tile-shadow" x="-10%" y="-10%" width="130%" height="130%" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="16" stdDeviation="24" flood-color="#0F172A" flood-opacity="0.08" />
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#0F172A" flood-opacity="0.04" />
+    </filter>
+
+    <!-- Glass Glow Filter -->
+    <filter id="blue-glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+
+    <filter id="sparkle-glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+
+    <!-- Squircle Tile Gradient -->
+    <linearGradient id="tile-bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="60%" stop-color="#FFFFFF" />
+      <stop offset="100%" stop-color="#F8FAFC" />
+    </linearGradient>
+
+    <!-- Left Matte Ribbon Gradient -->
+    <linearGradient id="left-ribbon" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2D3748" />
+      <stop offset="40%" stop-color="#1A202C" />
+      <stop offset="100%" stop-color="#0D131F" />
+    </linearGradient>
+
+    <!-- Left Ribbon Highlight Edge -->
+    <linearGradient id="left-edge-highlight" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#64748B" stop-opacity="0.6" />
+      <stop offset="100%" stop-color="#1E293B" stop-opacity="0" />
+    </linearGradient>
+
+    <!-- Right Blue Glass Ribbon Gradient -->
+    <linearGradient id="blue-glass-ribbon" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#1D4ED8" />
+      <stop offset="35%" stop-color="#2563EB" />
+      <stop offset="70%" stop-color="#3B82F6" />
+      <stop offset="90%" stop-color="#60A5FA" />
+      <stop offset="100%" stop-color="#93C5FD" />
+    </linearGradient>
+
+    <!-- Inner Glass Specular Sheen -->
+    <linearGradient id="glass-specular" x1="20%" y1="0%" x2="80%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.85" />
+      <stop offset="45%" stop-color="#BAE6FD" stop-opacity="0.5" />
+      <stop offset="80%" stop-color="#38BDF8" stop-opacity="0.1" />
+      <stop offset="100%" stop-color="#0284C7" stop-opacity="0" />
+    </linearGradient>
+
+    <!-- Fold Crease Shadow -->
+    <linearGradient id="crease-shadow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#000000" stop-opacity="0.45" />
+      <stop offset="100%" stop-color="#000000" stop-opacity="0" />
+    </linearGradient>
+  </defs>
+
+  <!-- Squircle Base Tile -->
+  <rect
+    x="32"
+    y="32"
+    width="416"
+    height="416"
+    rx="96"
+    ry="96"
+    fill="url(#tile-bg)"
+    stroke="#F1F5F9"
+    stroke-width="2.5"
+    filter="url(#tile-shadow)"
+  />
+
+  <!-- Subtle Squircle Inner Border -->
+  <rect
+    x="33.5"
+    y="33.5"
+    width="413"
+    height="413"
+    rx="94.5"
+    ry="94.5"
+    fill="none"
+    stroke="#FFFFFF"
+    stroke-width="2"
+    opacity="0.9"
+  />
+
+  <!-- ==================== THE 3D "V" RIBBON EMBLEM ==================== -->
+  <g transform="translate(0, -6)">
+    <!-- Crease / Bottom Under-Fold Loop -->
+    <path
+      d="M 206 242 C 218 268, 240 286, 262 276 C 274 270, 276 250, 260 232 C 248 218, 222 226, 206 242 Z"
+      fill="#0B132B"
+      opacity="0.95"
+    />
+
+    <!-- Bottom loop shadow on background -->
+    <path
+      d="M 210 248 C 224 276, 252 284, 268 268 C 254 286, 220 280, 206 252 Z"
+      fill="url(#crease-shadow)"
+    />
+
+    <!-- Left Wing (Matte Obsidian Ribbon) -->
+    <path
+      d="M 142 128 C 138 128, 134 132, 138 140 L 198 254 C 208 274, 228 284, 246 278 C 258 274, 266 260, 256 244 L 210 156 C 206 148, 198 138, 186 132 L 146 128 Z"
+      fill="url(#left-ribbon)"
+    />
+
+    <!-- Left Wing Highlight Rim -->
+    <path
+      d="M 142 128 L 198 254 C 205 267, 218 276, 232 278"
+      fill="none"
+      stroke="url(#left-edge-highlight)"
+      stroke-width="2.5"
+      stroke-linecap="round"
+    />
+
+    <!-- Right Wing (Luminous Ice Blue Glass Ribbon) -->
+    <path
+      d="M 230 274 C 248 280, 268 268, 276 252 L 334 148 C 340 138, 338 130, 328 130 C 318 130, 308 138, 300 152 L 252 238 C 244 252, 236 260, 224 266 L 230 274 Z"
+      fill="url(#blue-glass-ribbon)"
+      filter="url(#blue-glow)"
+    />
+
+    <!-- Right Wing Glass Body (Crisp Layer) -->
+    <path
+      d="M 232 272 C 248 278, 266 266, 274 250 L 332 148 C 337 139, 335 132, 326 132 C 317 132, 308 140, 302 152 L 254 238 C 246 252, 238 260, 228 265 L 232 272 Z"
+      fill="url(#blue-glass-ribbon)"
+    />
+
+    <!-- Glass Specular Interior Reflection -->
+    <path
+      d="M 298 156 L 326 138 C 330 136, 332 138, 330 144 L 282 230 C 274 244, 264 252, 252 256 L 298 156 Z"
+      fill="url(#glass-specular)"
+    />
+
+    <!-- Right Wing Outer Edge Bright Sheen -->
+    <path
+      d="M 264 264 L 332 144 C 336 137, 334 132, 328 132"
+      fill="none"
+      stroke="#E0F2FE"
+      stroke-width="2"
+      stroke-linecap="round"
+      opacity="0.9"
+    />
+
+    <!-- 4-Point Sapphire Star Sparkle (Top-Right of V) -->
+    <g transform="translate(344, 126)" filter="url(#sparkle-glow)">
+      <!-- Star Diamond Outer -->
+      <path
+        d="M 0 -18 Q 0 0 -18 0 Q 0 0 0 18 Q 0 0 18 0 Q 0 0 0 -18 Z"
+        fill="#0284C7"
+      />
+      <!-- Star Diamond Inner Core -->
+      <path
+        d="M 0 -12 Q 0 0 -12 0 Q 0 0 0 12 Q 0 0 12 0 Q 0 0 0 -12 Z"
+        fill="#38BDF8"
+      />
+      <!-- Center Bright Pinpoint -->
+      <circle cx="0" cy="0" r="2.5" fill="#FFFFFF" />
+    </g>
+  </g>
+
+  <!-- ==================== TYPOGRAPHY ==================== -->
+  <!-- "VIORA" Wordmark -->
+  <g fill="#0A0E1A" transform="translate(0, 332)">
+    <!-- Letter V -->
+    <path d="M 124 0 L 140 0 L 158 42 L 176 0 L 192 0 L 166 54 L 150 54 Z" />
+
+    <!-- Letter I -->
+    <rect x="208" y="0" width="14" height="54" rx="1.5" />
+
+    <!-- Letter O -->
+    <path
+      fill-rule="evenodd"
+      d="M 260 -1 C 242 -1, 230 12, 230 27 C 230 42, 242 55, 260 55 C 278 55, 290 42, 290 27 C 290 12, 278 -1, 260 -1 Z M 260 12 C 269 12, 275 18, 275 27 C 275 36, 269 42, 260 42 C 251 42, 245 36, 245 27 C 245 18, 251 12, 260 12 Z"
+    />
+
+    <!-- Letter R -->
+    <path
+      fill-rule="evenodd"
+      d="M 306 0 L 334 0 C 346 0, 354 7, 354 18 C 354 26, 348 32, 339 34 L 356 54 L 338 54 L 324 36 L 320 36 L 320 54 L 306 54 Z M 320 12 L 332 12 C 337 12, 340 14, 340 18 C 340 22, 337 24, 332 24 L 320 24 Z"
+    />
+
+    <!-- Letter A (Open Modern Crossbar-less Stylized 'Λ') -->
+    <path d="M 384 0 L 398 0 L 420 54 L 406 54 L 391 16 L 376 54 L 362 54 Z" />
+  </g>
+
+  <!-- "— AI —" Subtitle -->
+  <g transform="translate(0, 412)">
+    <!-- Left Dash -->
+    <line x1="162" y1="0" x2="198" y2="0" stroke="#0A0E1A" stroke-width="2.5" stroke-linecap="round" />
+
+    <!-- Text "AI" -->
+    <!-- Letter A -->
+    <path
+      fill="#0A0E1A"
+      d="M 226 -13 L 234 -13 L 244 11 L 237 11 L 234 4 L 226 4 L 223 11 L 216 11 Z M 230 -4 L 233 1 L 227 1 Z"
+    />
+    <!-- Letter I -->
+    <rect x="254" y="-13" width="6.5" height="24" rx="1" fill="#0A0E1A" />
+
+    <!-- Right Dash -->
+    <line x1="282" y1="0" x2="318" y2="0" stroke="#0A0E1A" stroke-width="2.5" stroke-linecap="round" />
+  </g>
+</svg>

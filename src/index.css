@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-viora-navy: #0b1a33;
+  --color-viora-blue: #2f6fed;
+  --color-viora-ink: #16233c;
+  --color-viora-bg: #f6f8fc;
+  --color-viora-surface: #ffffff;
+  --color-viora-border: #e2e8f0;
+}
+
+body {
+  color: #16233c;
+  background-color: #f6f8fc;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+html.dark body {
+  color: #f1f5f9;
+  background-color: #0b1329;
+}
+

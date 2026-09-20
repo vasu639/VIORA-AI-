@@ -1,0 +1,47 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile representation in Viora AI",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "format": "email", "maxLength": 256 },
+        "displayName": { "type": "string", "maxLength": 100 },
+        "photoURL": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "lastLogin": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["uid", "email"]
+    },
+    "SessionReport": {
+      "title": "SessionReport",
+      "description": "Oral examination or mock interview assessment record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "mode": { "type": "string", "enum": ["viva", "interview"] },
+        "overallScore": { "type": "number" },
+        "correctnessAverage": { "type": "number" },
+        "confidenceAverage": { "type": "number" },
+        "readinessPercentage": { "type": "number" },
+        "readinessLabel": { "type": "string", "maxLength": 100 },
+        "grade": { "type": "string", "maxLength": 10 },
+        "createdAt": { "type": "number" },
+        "syncedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "userId", "mode", "overallScore", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Stores user account information"
+    },
+    "/users/{userId}/sessions/{sessionId}": {
+      "schema": "SessionReport",
+      "description": "Stores oral examination and interview practice attempts belonging to the user"
+    }
+  }
+}

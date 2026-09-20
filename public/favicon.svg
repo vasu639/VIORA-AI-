@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="100%" height="100%">
+  <defs>
+    <linearGradient id="fav-tile-bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="100%" stop-color="#F8FAFC" />
+    </linearGradient>
+
+    <linearGradient id="fav-left-ribbon" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2D3748" />
+      <stop offset="50%" stop-color="#1A202C" />
+      <stop offset="100%" stop-color="#0D131F" />
+    </linearGradient>
+
+    <linearGradient id="fav-blue-glass" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#1D4ED8" />
+      <stop offset="35%" stop-color="#2563EB" />
+      <stop offset="70%" stop-color="#3B82F6" />
+      <stop offset="100%" stop-color="#93C5FD" />
+    </linearGradient>
+
+    <linearGradient id="fav-glass-specular" x1="20%" y1="0%" x2="80%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.9" />
+      <stop offset="50%" stop-color="#BAE6FD" stop-opacity="0.4" />
+      <stop offset="100%" stop-color="#0284C7" stop-opacity="0" />
+    </linearGradient>
+  </defs>
+
+  <rect x="12" y="12" width="232" height="232" rx="56" ry="56" fill="url(#fav-tile-bg)" stroke="#E2E8F0" stroke-width="2" />
+
+  <g transform="translate(8, 2)">
+    <path d="M 103 148 C 111 166, 126 178, 142 170 C 151 166, 153 152, 142 140 C 133 130, 114 136, 103 148 Z" fill="#0B132B" />
+    <path d="M 60 70 C 57 70, 55 73, 58 79 L 98 158 C 105 172, 120 180, 132 175 C 141 172, 147 162, 140 150 L 108 90 C 105 84, 99 77, 90 73 L 63 70 Z" fill="url(#fav-left-ribbon)" />
+    <path d="M 122 171 C 134 175, 147 167, 153 155 L 195 82 C 198 76, 197 70, 191 70 C 184 70, 178 76, 173 85 L 139 146 C 133 156, 127 162, 120 165 L 122 171 Z" fill="url(#fav-blue-glass)" />
+    <path d="M 170 88 L 191 75 C 193 73, 195 75, 193 79 L 160 140 C 154 150, 147 156, 138 158 L 170 88 Z" fill="url(#fav-glass-specular)" />
+    <g transform="translate(202, 66)">
+      <path d="M 0 -13 Q 0 0 -13 0 Q 0 0 0 13 Q 0 0 13 0 Q 0 0 0 -13 Z" fill="#0284C7" />
+      <circle cx="0" cy="0" r="2" fill="#FFFFFF" />
+    </g>
+  </g>
+</svg>

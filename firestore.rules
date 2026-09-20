@@ -1,0 +1,58 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny all unknown collections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidUserProfile(data, userId) {
+      return data.uid == userId
+        && (data.email is string && data.email.size() <= 256)
+        && (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 100))
+        && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 1000) || data.photoURL == null);
+    }
+
+    function isValidSessionReport(data, userId) {
+      return data.userId == userId
+        && (data.id is string && data.id.size() <= 128)
+        && (data.mode in ['viva', 'interview'])
+        && (data.overallScore is number && data.overallScore >= 0 && data.overallScore <= 100)
+        && (data.createdAt is number);
+    }
+
+    // User Profile Document
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow list: if false; // Blanket listing of users is forbidden
+      allow create, update: if isOwner(userId)
+        && isValidId(userId)
+        && isValidUserProfile(request.resource.data, userId);
+      allow delete: if isOwner(userId);
+
+      // User Sessions Subcollection
+      match /sessions/{sessionId} {
+        allow get: if isOwner(userId);
+        allow list: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+          && isValidId(sessionId)
+          && isValidSessionReport(request.resource.data, userId);
+        allow delete: if isOwner(userId);
+      }
+    }
+  }
+}
