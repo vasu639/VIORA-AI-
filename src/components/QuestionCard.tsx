@@ -269,16 +269,15 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
 
       {/* Question Grounding Badge */}
       <div className="flex flex-wrap items-center gap-2 pt-1">
-        {question.topic && (
+        {mode === "viva" ? (
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 dark:bg-blue-950/60 text-[#0B1A33] dark:text-blue-300 border border-blue-200/80 dark:border-blue-900/60">
             <span className="w-1.5 h-1.5 rounded-full bg-[#2F6FED] dark:bg-blue-400" />
-            Syllabus Topic: {question.topic}
+            Syllabus Topic: {question.topic || question.basedOn || "Course Syllabus"}
           </span>
-        )}
-        {question.basedOn && (
+        ) : (
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-950 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-900/60">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 dark:bg-emerald-400" />
-            Resume Grounding: {question.basedOn}
+            Resume Grounding: {question.basedOn || question.topic || "Candidate Experience"}
           </span>
         )}
       </div>

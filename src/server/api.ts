@@ -1,5 +1,6 @@
 import express from "express";
 import { GoogleGenAI } from "@google/genai";
+import mammoth from "mammoth";
 
 const PORT = 3000;
 
@@ -29,11 +30,14 @@ async function generateContentWithRetry(params: {
   preferredModel?: string;
 }) {
   const ai = getAiClient();
-  // Prioritize gemini-3.1-flash-lite and gemini-3.5-flash-lite for instant response, free-tier availability, and multimodal capability
+  // Valid, highly capable Gemini models:
+  // 1. gemini-3.8-flash (Primary workhorse with native 1M context, multimodal PDF/image parsing)
+  // 2. gemini-3.1-pro-preview (Advanced complex STEM reasoning and syllabus parsing)
+  // 3. gemini-3.1-flash-lite (Fast lightweight fallback)
   const models = [
-    params.preferredModel || "gemini-3.1-flash-lite",
-    "gemini-3.5-flash-lite",
-    "gemini-3.8-flash",
+    params.preferredModel || "gemini-3.8-flash",
+    "gemini-3.1-pro-preview",
+    "gemini-3.1-flash-lite",
   ];
 
   let lastError: any = null;
@@ -92,70 +96,191 @@ export function createApiApp() {
 
   // Generate Questions
   app.post(["/api/generate-questions", "/generate-questions"], async (req, res) => {
-    const { mode, subMode, courseName, level, numQuestions = 6, fileBase64, mimeType, textContent } = req.body;
+    const {
+      mode,
+      subMode,
+      courseName,
+      level,
+      numQuestions = 6,
+      fileBase64,
+      fileName,
+      mimeType,
+      textContent,
+    } = req.body;
 
     if (!fileBase64 && !textContent) {
       return res.status(400).json({ error: "No document or file was attached." });
     }
 
-    try {
-      const questionCount = Math.min(Math.max(Number(numQuestions) || 6, 3), 10);
+    const questionCount = Math.min(Math.max(Number(numQuestions) || 6, 3), 10);
+    let extractedText = textContent ? String(textContent).trim() : "";
+    let cleanBase64 = "";
+    let detectedMime = mimeType || "";
 
-      let prompt = "";
-      if (mode === "viva") {
-        prompt = `You are an experienced university examiner conducting an oral viva-voce examination.
-Attached is the syllabus for the course "${courseName || "Subject Syllabus"}". The student has chosen difficulty level: ${level || "Intermediate"}.
+    // Process fileBase64 if provided
+    if (fileBase64 && typeof fileBase64 === "string") {
+      let rawBase64 = fileBase64;
+      if (rawBase64.includes(",")) {
+        const parts = rawBase64.split(",");
+        rawBase64 = parts[1];
+        const match = parts[0].match(/:(.*?);/);
+        if (match && match[1]) {
+          detectedMime = match[1];
+        }
+      }
+      cleanBase64 = rawBase64.replace(/\s+/g, "");
 
-Read the syllabus and generate ${questionCount} viva questions that:
-- cover the syllabus's major topics, spread roughly evenly across them
-- match the ${level || "Intermediate"} difficulty (Beginner = definitions, fundamental concepts and terminology; Intermediate = explain mechanisms, workflows, and application; Advanced = architecture trade-offs, compare alternatives, justify design, and probe edge cases)
-- sound like something an examiner would actually ask out loud in a 15–20 minute viva, not an exam-paper essay question. Keep questions clear, focused, and conversational.
+      const lowerFileName = (fileName || "").toLowerCase();
+      const isDocx =
+        lowerFileName.endsWith(".docx") ||
+        detectedMime.includes("wordprocessingml") ||
+        detectedMime.includes("docx");
 
-Return ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:
-{"questions":[{"id":1,"topic":"<syllabus topic this comes from>","question":"<the question>"}]}`;
-      } else {
-        const selectedSubMode = subMode || "technical";
-        prompt = `You are an experienced technical interviewer conducting a ${selectedSubMode} interview.
-Attached is the candidate's resume/CV. Read it carefully and generate ${questionCount} interview questions that are grounded in what's actually on this resume — their specific listed skills, projects, tools, frameworks, and work experience — never a generic question that any stranger's resume would also get.
-
-Style guide for ${selectedSubMode}:
-- Technical: dig into a specific technology or project they listed; ask them to explain a real decision, architectural challenge, or trade-off from it.
-- Behavioral: STAR-style questions (situation/task/action/result) about teamwork, cross-functional collaboration, conflict, or overcoming failure, tied to a role or project they actually list on the resume.
-- Managerial: prioritization, delegation, system reliability, mentorship, and ownership questions scaled to their actual experience level shown on the resume.
-- Rapid Fire: short, punchy questions answerable in under 30-45 seconds each, covering the breadth of their listed skills and technical stack.
-
-Return ONLY valid JSON, no markdown fences, no commentary, in exactly this shape:
-{"questions":[{"id":1,"basedOn":"<specific resume detail or project this draws on>","question":"<the question>"}]}`;
+      // Extract text from Microsoft Word documents using mammoth
+      if (isDocx && cleanBase64) {
+        try {
+          const docxBuffer = Buffer.from(cleanBase64, "base64");
+          const result = await mammoth.extractRawText({ buffer: docxBuffer });
+          if (result.value && result.value.trim()) {
+            extractedText = (extractedText ? extractedText + "\n\n" : "") + result.value.trim();
+            console.log(`[Docx Parser] Successfully extracted ${result.value.length} characters from Word syllabus/resume.`);
+            cleanBase64 = ""; // Word document now converted to text
+          }
+        } catch (docxErr) {
+          console.warn("[Docx Parser] Mammoth extraction failed, continuing with file data:", docxErr);
+        }
       }
 
-      const contents: Array<string | { text: string } | { inlineData: { mimeType: string; data: string } }> = [
-        { text: prompt },
-      ];
+      // Extract plain text / markdown files directly
+      const isPlainText =
+        lowerFileName.endsWith(".txt") ||
+        lowerFileName.endsWith(".md") ||
+        detectedMime.startsWith("text/");
 
-      if (fileBase64) {
-        // Strip data URI prefix if present
-        let cleanBase64 = fileBase64;
-        let detectedMime = mimeType || "application/pdf";
-        if (typeof fileBase64 === "string" && fileBase64.includes(",")) {
-          const parts = fileBase64.split(",");
-          cleanBase64 = parts[1];
-          const match = parts[0].match(/:(.*?);/);
-          if (match && match[1]) {
-            detectedMime = match[1];
+      if (isPlainText && cleanBase64) {
+        try {
+          const decoded = Buffer.from(cleanBase64, "base64").toString("utf-8");
+          if (decoded && decoded.trim()) {
+            extractedText = (extractedText ? extractedText + "\n\n" : "") + decoded.trim();
+            cleanBase64 = "";
+          }
+        } catch (txtErr) {
+          console.warn("[Text Parser] Plain text decoding error:", txtErr);
+        }
+      }
+
+      // Ensure valid MIME type for Gemini inlineData
+      if (cleanBase64) {
+        if (!detectedMime || detectedMime === "application/octet-stream") {
+          if (lowerFileName.endsWith(".pdf")) {
+            detectedMime = "application/pdf";
+          } else if (lowerFileName.endsWith(".png")) {
+            detectedMime = "image/png";
+          } else if (lowerFileName.endsWith(".jpg") || lowerFileName.endsWith(".jpeg")) {
+            detectedMime = "image/jpeg";
+          } else if (lowerFileName.endsWith(".webp")) {
+            detectedMime = "image/webp";
+          } else {
+            detectedMime = "application/pdf";
           }
         }
+      }
+    }
 
+    try {
+      let prompt = "";
+      if (mode === "viva") {
+        prompt = `You are an experienced, highly qualified university examiner conducting an official oral viva-voce examination.
+The candidate has provided their official syllabus/curriculum for: "${courseName || "Attached Syllabus"}".
+Exam Difficulty: ${level || "Intermediate"}.
+
+CRITICAL MANDATORY INSTRUCTIONS (STRICT GROUNDING):
+1. THOROUGHLY READ THE ATTACHED SYLLABUS:
+   - Identify the specific Units, Modules, Chapters, Theories, Equations, Mechanisms, and Learning Outcomes detailed in the syllabus.
+   - Every single question you create MUST be 100% grounded in the specific academic subject of this syllabus.
+   - Do NOT ask generic computer science or operating systems questions UNLESS the attached syllabus itself is explicitly about operating systems or computer science. If this syllabus is about Law, Medicine, Chemistry, History, Civil Engineering, Business, Finance, etc., every question must strictly be about that exact field.
+   - Distribute the ${questionCount} questions across the different units/modules found in the syllabus so the entire syllabus is represented.
+
+2. DIFFICULTY LEVEL (${level || "Intermediate"}):
+   - Beginner: Definitions, foundational concepts, core mechanisms, standard terminology.
+   - Intermediate: Working mechanisms, process workflows, comparative analysis, practical application.
+   - Advanced: In-depth design decisions, edge cases, trade-offs, theoretical limitations, and critical evaluation.
+
+3. CONVERSATIONAL ORAL VIVA FORMAT:
+   - Frame questions the way a live professor speaks aloud across a table (e.g., "Looking at Unit 2 on ..., could you explain how ...", "In your syllabus topic ..., what is the key distinction between ...?").
+   - Keep questions focused and concise (1–3 sentences each).
+
+Return ONLY valid JSON matching this exact structure:
+{
+  "detectedSubject": "<Subject or course name detected from the syllabus>",
+  "detectedUnits": ["<Unit 1 title>", "<Unit 2 title>", ...],
+  "questions": [
+    {
+      "id": 1,
+      "topic": "<Exact unit or topic from the uploaded syllabus>",
+      "basedOn": "<Syllabus reference or unit name>",
+      "question": "<Conversational viva question directly testing this topic>"
+    }
+  ]
+}`;
+      } else {
+        const selectedSubMode = subMode || "technical";
+        prompt = `You are an expert senior interviewer conducting a ${selectedSubMode} interview.
+The candidate has provided their resume/CV or background profile.
+
+CRITICAL MANDATORY INSTRUCTIONS (STRICT GROUNDING):
+1. THOROUGHLY READ THE ATTACHED RESUME / CV:
+   - Extract the candidate's actual projects, work experience, company names, tools, languages, frameworks, and quantifiable achievements.
+   - Every question you generate MUST be directly and unmistakably grounded in what is actually written on their resume.
+   - Do NOT ask generic textbook questions that could be asked to anyone. Mention the specific project name, company, or technology from their resume in the question or in the "basedOn" field.
+
+2. STYLE GUIDE FOR ${selectedSubMode.toUpperCase()}:
+   - Technical: Probe a specific architecture, tool, or engineering challenge from one of their listed projects. Ask why they chose that approach and how they handled trade-offs, performance, or edge cases.
+   - Behavioral: Ask STAR-format questions (Situation, Task, Action, Result) linked to a specific team, role, or initiative listed on their resume.
+   - Managerial: Ask about leadership, project scoping, technical debt, or stakeholder management scaled to their actual seniority level.
+   - Rapid Fire: Short, direct questions (30-second answers) covering their listed technical stack and skills.
+
+3. QUESTION COUNT:
+   - Generate exactly ${questionCount} questions.
+
+Return ONLY valid JSON matching this exact structure:
+{
+  "detectedCandidateName": "<Candidate name or 'Candidate'>",
+  "detectedKeySkills": ["<Skill 1>", "<Skill 2>", "<Project 1>", ...],
+  "questions": [
+    {
+      "id": 1,
+      "topic": "<Role, Project, or Skill Area>",
+      "basedOn": "<Exact project, company, or listed achievement from their resume>",
+      "question": "<Targeted interview question referencing their background>"
+    }
+  ]
+}`;
+      }
+
+      // Build multimodal contents array: binary file data first, text content second, prompt last
+      const contents: Array<any> = [];
+
+      if (cleanBase64) {
         contents.push({
           inlineData: {
             mimeType: detectedMime,
             data: cleanBase64,
           },
         });
-      } else if (textContent) {
+      }
+
+      if (extractedText) {
         contents.push({
-          text: `Document Content:\n${textContent}`,
+          text: `DOCUMENT CONTENT (SYLLABUS / RESUME TEXT):\n${extractedText}`,
         });
       }
+
+      contents.push({ text: prompt });
+
+      console.log(
+        `[Gemini] Generating questions: mode=${mode}, course="${courseName || ""}", hasBase64=${!!cleanBase64}, mime=${detectedMime}, textLength=${extractedText.length}`
+      );
 
       const response = await generateContentWithRetry({
         contents,
@@ -190,17 +315,62 @@ Return ONLY valid JSON, no markdown fences, no commentary, in exactly this shape
       const normalized = parsed.questions.map((q: any, idx: number) => ({
         id: q.id || idx + 1,
         question: q.question || q.text || q.prompt || "Question",
-        topic: q.topic || q.basedOn || q.category || (mode === "viva" ? "Course Syllabus Topic" : "Technical Background"),
+        topic: q.topic || q.basedOn || q.category || (mode === "viva" ? "Syllabus Topic" : "Technical Background"),
         basedOn: q.basedOn || q.topic || q.category || (mode === "viva" ? "Course Syllabus" : "Resume Background"),
       }));
 
-      return res.status(200).json({ questions: normalized });
+      return res.status(200).json({
+        questions: normalized,
+        detectedSubject: parsed.detectedSubject || courseName || undefined,
+        detectedUnits: Array.isArray(parsed.detectedUnits) ? parsed.detectedUnits : undefined,
+        detectedCandidateName: parsed.detectedCandidateName || undefined,
+        detectedKeySkills: Array.isArray(parsed.detectedKeySkills) ? parsed.detectedKeySkills : undefined,
+      });
     } catch (err: any) {
       console.error("Error generating questions with Gemini:", err);
 
-      // Resilient fallback questions ensure candidate is never stranded
+      // If multimodal failed (e.g. corrupted PDF or parsing error), try text-guided emergency generation
+      if (courseName || extractedText) {
+        try {
+          console.log("[Gemini Fallback] Attempting text-prompt generation for:", courseName || "Syllabus");
+          const textOnlyPrompt =
+            mode === "viva"
+              ? `You are an oral viva examiner. The student is taking an examination in the course: "${courseName || "Subject Syllabus"}". Difficulty: ${level || "Intermediate"}.
+${extractedText ? `Syllabus notes:\n${extractedText.slice(0, 4000)}\n` : ""}
+Generate ${questionCount} oral viva questions specifically on "${courseName || "this subject"}". Do NOT ask generic computer science or operating systems questions unless the course is explicitly computer science.
+Return JSON: {"questions":[{"id":1,"topic":"<topic>","basedOn":"${courseName || "Course Syllabus"}","question":"<question>"}]}`
+              : `You are an interviewer conducting a ${subMode || "technical"} interview.
+${extractedText ? `Candidate background notes:\n${extractedText.slice(0, 4000)}\n` : ""}
+Generate ${questionCount} interview questions tailored to their background.
+Return JSON: {"questions":[{"id":1,"topic":"Technical","basedOn":"Candidate Background","question":"<question>"}]}`;
+
+          const textResp = await generateContentWithRetry({
+            contents: [{ text: textOnlyPrompt }],
+            config: { responseMimeType: "application/json" },
+          });
+          const textJson = textResp.text?.replace(/```json\s*/gi, "").replace(/```\s*$/gi, "").trim() || "{}";
+          const parsed = JSON.parse(textJson);
+          if (parsed.questions && Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+            const normalized = parsed.questions.map((q: any, idx: number) => ({
+              id: q.id || idx + 1,
+              question: q.question || q.text || "Question",
+              topic: q.topic || courseName || "Syllabus Topic",
+              basedOn: q.basedOn || courseName || "Course Syllabus",
+            }));
+            return res.status(200).json({ questions: normalized, detectedSubject: courseName });
+          }
+        } catch (fbErr) {
+          console.warn("[Gemini Fallback] Text fallback also failed:", fbErr);
+        }
+      }
+
+      // Smart Subject-Aware Resilient Fallback (ensures candidate is NEVER given irrelevant OS questions)
       const fallbackQs = getResilientFallbackQuestions(mode, subMode, courseName, level, numQuestions);
-      return res.status(200).json({ questions: fallbackQs });
+      return res.status(200).json({
+        questions: fallbackQs,
+        detectedSubject: courseName || (mode === "viva" ? "Course Syllabus" : "Candidate Resume"),
+        isFallback: true,
+      });
     }
   });
 
@@ -212,14 +382,46 @@ function getResilientFallbackQuestions(
   numQuestions: number = 5
 ) {
   const count = Math.min(Math.max(Number(numQuestions) || 5, 3), 10);
+  const subject = courseName.trim() || (mode === "viva" ? "this academic subject" : "your technical discipline");
+
   if (mode === "viva") {
     const list = [
-      { id: 1, topic: "Core System Architecture", question: `How would you explain the foundational principles of ${courseName || "this course"} to an examiner, and what are its primary architectural layers?` },
-      { id: 2, topic: "Process Concurrency & Invariants", question: `What concurrency or race hazards commonly occur in ${courseName || "this subject"}, and how do synchronization primitives safeguard data integrity?` },
-      { id: 3, topic: "Memory Management & Virtualization", question: `Walk through the mechanics of virtual address translation, page faults, and how modern page replacement policies prevent thrashing.` },
-      { id: 4, topic: "Consensus & Coordination", question: `Explain the key trade-offs between consistency and availability under network partitions, and how consensus protocols reach agreement.` },
-      { id: 5, topic: "Failure Recovery & Edge Cases", question: `If a primary node or worker process abruptly fails mid-transaction, what write-ahead logging or recovery protocol restores consistent state?` },
-      { id: 6, topic: "Production Scalability Trade-offs", question: `Compare the monolithic approach to modern distributed or containerized deployment for this architecture. Where does the design bottleneck first?` }
+      {
+        id: 1,
+        topic: `${subject}: Fundamental Principles`,
+        basedOn: `${subject} Core Concepts`,
+        question: `Could you walk me through the foundational theoretical framework of ${subject}, and explain how its core laws or principles govern practical problems in this field?`,
+      },
+      {
+        id: 2,
+        topic: `${subject}: Methodologies & Mechanisms`,
+        basedOn: `${subject} Key Mechanisms`,
+        question: `When applying key analytical or experimental methodologies in ${subject}, what step-by-step mechanism is followed, and what are its primary assumptions or limitations?`,
+      },
+      {
+        id: 3,
+        topic: `${subject}: Comparative Analysis`,
+        basedOn: `${subject} Applied Theories`,
+        question: `In ${subject}, how do you evaluate competing models, approaches, or hypotheses when given real-world constraints? What criteria dictate the optimal choice?`,
+      },
+      {
+        id: 4,
+        topic: `${subject}: Practical Application & Edge Cases`,
+        basedOn: `${subject} Case Studies`,
+        question: `Can you analyze a notable case study, phenomenon, or practical scenario in ${subject} and explain how anomalous data or edge conditions are resolved?`,
+      },
+      {
+        id: 5,
+        topic: `${subject}: Advanced Synthesis`,
+        basedOn: `${subject} Advanced Principles`,
+        question: `At the ${level} level of ${subject}, how do recent developments or advanced paradigms challenge traditional solutions in the literature?`,
+      },
+      {
+        id: 6,
+        topic: `${subject}: Critical Evaluation`,
+        basedOn: `${subject} Research & Implementation`,
+        question: `If an examiner or peer critiques a key solution or derivation in ${subject}, what empirical evidence or theoretical proofs would you cite to defend your conclusions?`,
+      },
     ];
     return list.slice(0, count);
   } else {
@@ -242,26 +444,25 @@ function getResilientFallbackQuestions(
       return list.slice(0, count);
     } else if (subMode === "rapidfire") {
       const list = [
-        { id: 1, basedOn: "Runtime Internals", question: "Explain the difference between process memory heap and stack allocation in 30 seconds." },
-        { id: 2, basedOn: "Database Indexing", question: "Why do B-Trees outclass binary search trees for disk-based database indexes?" },
-        { id: 3, basedOn: "Distributed Caching", question: "Explain the trade-off between cache-aside and write-through caching patterns." },
-        { id: 4, basedOn: "Network Transport", question: "How does TCP congestion control handle packet drops compared to UDP?" },
-        { id: 5, basedOn: "API Protocols", question: "When would you prefer gRPC over REST with JSON in a high-scale microservices backend?" }
+        { id: 1, basedOn: "Core Principles", question: `Explain the foundational distinction between static and dynamic analysis in 30 seconds.` },
+        { id: 2, basedOn: "Trade-offs", question: `What is the single biggest architectural trade-off you make when choosing distributed systems over monoliths?` },
+        { id: 3, basedOn: "State Management", question: `How do you guarantee consistency when coordinating state updates across multiple independent services?` },
+        { id: 4, basedOn: "Performance Bottlenecks", question: `When an application experiences high tail latency (p99), what is the first metric or resource you inspect?` },
+        { id: 5, basedOn: "Testing & Validation", question: `What is your strategy for catching critical regressions before code merges into production?` }
       ];
       return list.slice(0, count);
     } else {
       const list = [
-        { id: 1, basedOn: "Event-Driven Data Pipelines", question: "Looking at your listed Kafka streaming experience, how did you partition topics and handle consumer group rebalancing under heavy load?" },
-        { id: 2, basedOn: "Latency Optimization & Redis", question: "You highlighted reducing p99 latency down to sub-35ms. Walk through how you structured distributed keys, TTLs, and cache warming." },
-        { id: 3, basedOn: "Microservices & Containerization", question: "Walk me through how you handled service discovery, circuit breaking, and database migrations during your Kubernetes rollout." },
-        { id: 4, basedOn: "Concurrency & Lock Contention", question: "How did you prevent race conditions and connection pool exhaustion in your database transactions during concurrent spikes?" },
-        { id: 5, basedOn: "Observability & Tracing", question: "What distributed tracing and logging architecture did you implement to diagnose multi-service request flows?" }
+        { id: 1, basedOn: "Project Architecture", question: `Walk me through the architectural decisions behind your primary listed project. Why did you choose that particular stack and design?` },
+        { id: 2, basedOn: "Scalability & Bottlenecks", question: `What performance or scalability challenges did you encounter in your recent projects, and how did you diagnose and resolve them?` },
+        { id: 3, basedOn: "Data Integrity & Concurrency", question: `How do your applications safeguard data integrity and handle race conditions or concurrent access?` },
+        { id: 4, basedOn: "Testing & Quality Assurance", question: `Describe your testing methodology: how do you balance unit tests, integration tests, and edge case coverage?` },
+        { id: 5, basedOn: "Production Operations & Monitoring", question: `How do you monitor production health, track errors, and ensure system uptime for the systems you build?` }
       ];
       return list.slice(0, count);
     }
   }
 }
-
 
   // Comprehensive Body Language & Presence Coach Bank (Categorized, Diverse & Non-Repeating)
   const DIVERSE_COACH_TIPS: { category: string; label: string; tip: string }[] = [

@@ -63,6 +63,9 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
   const [status, setStatus] = useState<"idle" | "loading" | "error" | "data" | "finished">("idle");
   const [errorMsg, setErrorMsg] = useState("");
   const [questions, setQuestions] = useState<QuestionItem[]>([]);
+  const [detectedSubject, setDetectedSubject] = useState<string | null>(null);
+  const [detectedUnits, setDetectedUnits] = useState<string[] | null>(null);
+  const [detectedKeySkills, setDetectedKeySkills] = useState<string[] | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [answers, setAnswers] = useState<AnswerItem[]>([]);
   const [isSubmittingAnswer, setIsSubmittingAnswer] = useState(false);
@@ -142,10 +145,8 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
       return;
     }
 
-    if (isViva && !courseName.trim()) {
-      setValidationError("Please specify the course name or subject title.");
-      return;
-    }
+    // If viva mode, require either course name OR an uploaded syllabus (AI will detect course name if omitted)
+    const effectiveCourseName = courseName.trim() || (isViva ? "Course Syllabus" : "");
 
     setValidationError(null);
     setStatus("loading");
@@ -154,10 +155,11 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
     const payload = {
       mode,
       subMode: isViva ? undefined : subMode,
-      courseName: isViva ? courseName.trim() : undefined,
+      courseName: effectiveCourseName || undefined,
       level: isViva ? difficulty : undefined,
       numQuestions,
       fileBase64,
+      fileName: file?.name || sampleName || undefined,
       textContent,
       mimeType: file?.type || (fileBase64 ? "application/pdf" : undefined),
     };
@@ -180,6 +182,13 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
       }
 
       setQuestions(data.questions);
+      if (data.detectedSubject && (!courseName || courseName === "Course Syllabus")) {
+        setCourseName(data.detectedSubject);
+      }
+      setDetectedSubject(data.detectedSubject || null);
+      setDetectedUnits(Array.isArray(data.detectedUnits) ? data.detectedUnits : null);
+      setDetectedKeySkills(Array.isArray(data.detectedKeySkills) ? data.detectedKeySkills : null);
+
       setCurrentIndex(0);
       setAnswers([]);
       setPostureTips([]);
@@ -517,11 +526,18 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
             />
 
             {/* Document Grounding Info */}
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-2xs space-y-2.5 text-xs">
-              <h4 className="font-bold text-[#0B1A33] dark:text-white uppercase tracking-wider">
-                Active Assessment
-              </h4>
-              <div className="space-y-1 text-slate-600 dark:text-slate-300">
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-2xs space-y-3 text-xs">
+              <div className="flex items-center justify-between">
+                <h4 className="font-bold text-[#0B1A33] dark:text-white uppercase tracking-wider">
+                  Active Assessment
+                </h4>
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-900/60">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse" />
+                  Grounded in Syllabus
+                </span>
+              </div>
+
+              <div className="space-y-1.5 text-slate-600 dark:text-slate-300">
                 <p>
                   <strong className="text-slate-900 dark:text-slate-200">Mode:</strong>{" "}
                   {isViva ? "Oral Viva Voce" : `Interview (${subMode})`}
@@ -529,7 +545,8 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
                 {isViva && (
                   <>
                     <p>
-                      <strong className="text-slate-900 dark:text-slate-200">Course:</strong> {courseName}
+                      <strong className="text-slate-900 dark:text-slate-200">Course:</strong>{" "}
+                      {detectedSubject || courseName || "Subject Syllabus"}
                     </p>
                     <p>
                       <strong className="text-slate-900 dark:text-slate-200">Difficulty:</strong> {difficulty}
@@ -537,10 +554,49 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
                   </>
                 )}
                 <p>
-                  <strong className="text-slate-900 dark:text-slate-200">Document:</strong>{" "}
-                  {file?.name || sampleName || "Attached PDF"}
+                  <strong className="text-slate-900 dark:text-slate-200">Source:</strong>{" "}
+                  {file?.name || sampleName || (textContent ? "Pasted Document Text" : "Attached Document")}
                 </p>
               </div>
+
+              {/* Detected Syllabus Units Coverage */}
+              {detectedUnits && detectedUnits.length > 0 && (
+                <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
+                  <p className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                    Syllabus Units Covered:
+                  </p>
+                  <div className="space-y-1">
+                    {detectedUnits.slice(0, 4).map((unit, uIdx) => (
+                      <div
+                        key={uIdx}
+                        className="text-[11px] bg-slate-50 dark:bg-slate-800/80 px-2 py-1 rounded text-slate-700 dark:text-slate-300 border border-slate-200/60 dark:border-slate-700/60 truncate"
+                        title={unit}
+                      >
+                        • {unit}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Detected Resume Skills Coverage */}
+              {detectedKeySkills && detectedKeySkills.length > 0 && (
+                <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
+                  <p className="text-[11px] font-semibold text-slate-700 dark:text-slate-300">
+                    Targeted Projects & Skills:
+                  </p>
+                  <div className="flex flex-wrap gap-1">
+                    {detectedKeySkills.slice(0, 6).map((skill, sIdx) => (
+                      <span
+                        key={sIdx}
+                        className="text-[10px] bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-700 dark:text-slate-300"
+                      >
+                        {skill}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
