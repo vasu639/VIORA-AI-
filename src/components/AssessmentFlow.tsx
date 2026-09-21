@@ -24,6 +24,7 @@ import { ResultsSummary } from "./ResultsSummary";
 import { CameraCoachWidget } from "./CameraCoachWidget";
 import { captureFrame } from "../lib/camera";
 import { saveSessionToStorage } from "../lib/storage";
+import { SAMPLE_VIVA_SYLLABUS, SAMPLE_INTERVIEW_RESUME } from "../lib/sampleDocs";
 
 interface AssessmentFlowProps {
   mode: AssessmentMode;
@@ -135,18 +136,34 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
 
   // Generate Questions via Gemini API
   const handleGenerateQuestions = async () => {
-    // Validate inputs
-    if (!fileBase64 && !textContent) {
-      setValidationError(
-        isViva
-          ? "Please upload a syllabus PDF or use the sample syllabus."
-          : "Please upload a resume PDF or use the sample resume."
-      );
-      return;
+    let activeFileBase64 = fileBase64;
+    let activeTextContent = textContent;
+    let activeFileName = file?.name || sampleName || undefined;
+    let effectiveCourseName = courseName.trim();
+
+    // If user has not uploaded a file, entered text, or typed a course name, auto-load realistic sample
+    if (!activeFileBase64 && !activeTextContent && !effectiveCourseName) {
+      if (isViva) {
+        activeTextContent = SAMPLE_VIVA_SYLLABUS;
+        activeFileName = "CS402: Distributed Systems Syllabus (Sample)";
+        setSampleName(activeFileName);
+        setTextContent(SAMPLE_VIVA_SYLLABUS);
+        effectiveCourseName = "CS402: Distributed Systems & Operating Systems";
+        setCourseName(effectiveCourseName);
+      } else {
+        activeTextContent = SAMPLE_INTERVIEW_RESUME;
+        activeFileName = "Priya Sharma: Senior Engineer Resume (Sample)";
+        setSampleName(activeFileName);
+        setTextContent(SAMPLE_INTERVIEW_RESUME);
+        if (!targetRole.trim()) {
+          setTargetRole("Senior Full-Stack Engineer");
+        }
+      }
     }
 
-    // If viva mode, require either course name OR an uploaded syllabus (AI will detect course name if omitted)
-    const effectiveCourseName = courseName.trim() || (isViva ? "Course Syllabus" : "");
+    if (!effectiveCourseName && isViva) {
+      effectiveCourseName = "Course Syllabus";
+    }
 
     setValidationError(null);
     setStatus("loading");
@@ -156,12 +173,13 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
       mode,
       subMode: isViva ? undefined : subMode,
       courseName: effectiveCourseName || undefined,
+      targetRole: !isViva ? targetRole.trim() : undefined,
       level: isViva ? difficulty : undefined,
       numQuestions,
-      fileBase64,
-      fileName: file?.name || sampleName || undefined,
-      textContent,
-      mimeType: file?.type || (fileBase64 ? "application/pdf" : undefined),
+      fileBase64: activeFileBase64,
+      fileName: activeFileName,
+      textContent: activeTextContent,
+      mimeType: file?.type || (activeFileBase64 ? "application/pdf" : undefined),
     };
 
     try {
@@ -841,17 +859,87 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
           />
         )}
 
-        {/* Action Button */}
-        <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-end">
-          <button
-            type="button"
-            onClick={handleGenerateQuestions}
-            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-8 py-3.5 bg-[#0B1A33] hover:bg-[#16233C] dark:bg-blue-600 dark:hover:bg-blue-700 text-white font-bold text-sm rounded-xl shadow-xs hover:shadow-md transition-all group"
-          >
-            <Sparkles className="w-4 h-4 text-blue-400 group-hover:rotate-12 transition-transform" />
-            <span>Generate Examination Questions</span>
-            <ArrowRight className="w-4 h-4 text-blue-300 group-hover:translate-x-1 transition-transform" />
-          </button>
+        {/* Action Button & Grounding Status */}
+        <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-3">
+          {/* Grounding Status Preview */}
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-2 text-slate-600 dark:text-slate-300">
+              {file || sampleName || textContent ? (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/60 font-medium">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                  <span>
+                    Ready to generate: Grounded in{" "}
+                    <strong>
+                      {file?.name || sampleName || (isViva ? "Pasted Syllabus" : "Pasted Resume")}
+                    </strong>
+                  </span>
+                </span>
+              ) : courseName.trim() ? (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-50 dark:bg-blue-950/60 text-[#2F6FED] dark:text-blue-300 border border-blue-200 dark:border-blue-900/60 font-medium">
+                  <BookOpen className="w-3.5 h-3.5" />
+                  <span>
+                    Ready to generate: Questions for <strong>{courseName.trim()}</strong>
+                  </span>
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                  <span>Upload a syllabus above, or click below to start with a sample syllabus</span>
+                </span>
+              )}
+            </div>
+
+            {(!file && !sampleName && !textContent) && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (isViva) {
+                    handleFileSelect(
+                      null,
+                      null,
+                      SAMPLE_VIVA_SYLLABUS,
+                      "CS402: Distributed Systems Syllabus (Sample)"
+                    );
+                    setCourseName("CS402: Distributed Systems & Operating Systems");
+                  } else {
+                    handleFileSelect(
+                      null,
+                      null,
+                      SAMPLE_INTERVIEW_RESUME,
+                      "Priya Sharma: Senior Engineer Resume (Sample)"
+                    );
+                    setTargetRole("Senior Full-Stack Engineer");
+                  }
+                }}
+                className="text-xs font-semibold text-[#2F6FED] dark:text-blue-400 hover:underline inline-flex items-center gap-1"
+              >
+                <Sparkles className="w-3 h-3 text-amber-500" />
+                Quick Load Sample {isViva ? "Syllabus" : "Resume"}
+              </button>
+            )}
+          </div>
+
+          {validationError && (
+            <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/60 rounded-xl flex items-center justify-between text-xs text-red-700 dark:text-red-300">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-red-500 shrink-0" />
+                <span>{validationError}</span>
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-center justify-end">
+            <button
+              type="button"
+              id="generate-questions-submit-btn"
+              onClick={handleGenerateQuestions}
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-8 py-3.5 bg-[#0B1A33] hover:bg-[#16233C] dark:bg-blue-600 dark:hover:bg-blue-700 text-white font-bold text-sm rounded-xl shadow-xs hover:shadow-md transition-all group"
+            >
+              <Sparkles className="w-4 h-4 text-blue-400 group-hover:rotate-12 transition-transform" />
+              <span>Generate Examination Questions</span>
+              <ArrowRight className="w-4 h-4 text-blue-300 group-hover:translate-x-1 transition-transform" />
+            </button>
+          </div>
         </div>
       </div>
     </div>

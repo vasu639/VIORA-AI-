@@ -37,14 +37,11 @@ async function generateContentWithRetry(params: {
 }) {
   const ai = getAiClient();
   // Valid, highly performant and accessible Gemini models:
-  // 1. gemini-3.5-flash-lite: Blazing fast (~900ms), 1M token context, native PDF and image multimodal support
-  // 2. gemini-3.1-flash-lite: Ultra-reliable lightweight model (~1.5s)
-  // 3. gemini-flash-latest: Full flash model
-  // 4. gemini-3.8-flash: Multimodal workhorse
-  // (Avoid gemini-3.1-pro-preview as it requires a paid tier API key)
+  // 1. gemini-3.1-flash-lite: Ultra-reliable, blazing fast (~1.2s), 1M token context
+  // 2. gemini-flash-latest: Full flash model alias
+  // 3. gemini-3.8-flash: Multimodal workhorse
   const models = [
-    params.preferredModel || "gemini-3.5-flash-lite",
-    "gemini-3.1-flash-lite",
+    params.preferredModel || "gemini-3.1-flash-lite",
     "gemini-flash-latest",
     "gemini-3.8-flash",
   ];
@@ -62,8 +59,8 @@ async function generateContentWithRetry(params: {
       let timer: any;
       const timeoutPromise = new Promise<never>((_, reject) => {
         timer = setTimeout(
-          () => reject(new Error(`Model ${model} timed out after 14s`)),
-          14000
+          () => reject(new Error(`Model ${model} timed out after 12s`)),
+          12000
         );
       });
 
@@ -76,7 +73,6 @@ async function generateContentWithRetry(params: {
     } catch (err: any) {
       lastError = err;
       console.warn(`[Gemini] Model ${model} failed:`, err?.message || err);
-      // Immediately cascade to the next model in the list
     }
   }
   throw lastError;
@@ -119,8 +115,12 @@ export function createApiApp() {
       textContent,
     } = req.body;
 
-    if (!fileBase64 && !textContent) {
-      return res.status(400).json({ error: "No document or file was attached." });
+    const hasDocument = !!(fileBase64 || textContent);
+    const hasCourseOrRole = !!((courseName && String(courseName).trim()) || (req.body.targetRole && String(req.body.targetRole).trim()));
+    
+    let effectiveCourseName = (courseName && String(courseName).trim()) || "";
+    if (!hasDocument && !hasCourseOrRole) {
+      effectiveCourseName = mode === "viva" ? "Computer Science & Engineering" : "Software Engineering";
     }
 
     const questionCount = Math.min(Math.max(Number(numQuestions) || 6, 3), 10);
@@ -185,6 +185,10 @@ export function createApiApp() {
               console.log(
                 `[PDF Parser] Successfully extracted ${cleanedPdfText.length} characters of text from PDF syllabus/resume.`
               );
+              // Clear cleanBase64 if text extraction yielded substantial text to avoid multi-megabyte payloads to Gemini
+              if (cleanedPdfText.length > 50) {
+                cleanBase64 = "";
+              }
             }
           }
         } catch (pdfErr) {
@@ -317,6 +321,17 @@ Return ONLY valid JSON matching this exact structure:
         contents.push({
           text: `USER UPLOADED DOCUMENT CONTENT (${mode === "viva" ? "SYLLABUS / CURRICULUM" : "RESUME / CV"}):\n\n${extractedText.slice(0, 60000)}`,
         });
+      } else if (!cleanBase64) {
+        if (mode === "viva") {
+          contents.push({
+            text: `ACADEMIC SUBJECT / COURSE TITLE: "${effectiveCourseName}". The student is preparing for an oral viva-voce exam for this course. Formulate ${questionCount} authentic examination questions testing the core units, theoretical foundations, formulas/mechanisms, and applications of "${effectiveCourseName}".`,
+          });
+        } else {
+          const role = (req.body.targetRole && String(req.body.targetRole).trim()) || "Software Engineer";
+          contents.push({
+            text: `TARGET JOB ROLE: "${role}". Sub-mode: ${subMode || "technical"}. Formulate ${questionCount} authentic, practical interview questions for a candidate interviewing for "${role}".`,
+          });
+        }
       }
 
       contents.push({ text: prompt });
