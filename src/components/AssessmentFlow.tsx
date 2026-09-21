@@ -2,7 +2,6 @@ import React, { useState, useRef } from "react";
 import {
   Sparkles,
   ArrowRight,
-  ArrowLeft,
   AlertCircle,
   RefreshCw,
   BookOpen,
@@ -137,13 +136,12 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
   // Generate Questions via Gemini API
   const handleGenerateQuestions = async () => {
     // Validate inputs
-    if (!fileBase64 && !textContent && !courseName.trim() && (!targetRole || !targetRole.trim())) {
+    if (!fileBase64 && !textContent) {
       setValidationError(
         isViva
-          ? "Please upload a syllabus document (PDF/Word/Text) or use the sample syllabus."
-          : "Please upload a resume document (PDF/Word/Text) or use the sample resume."
+          ? "Please upload a syllabus PDF or use the sample syllabus."
+          : "Please upload a resume PDF or use the sample resume."
       );
-      setStatus("idle");
       return;
     }
 
@@ -470,31 +468,14 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
             <h3 className="text-base font-bold text-red-950 dark:text-red-300">Generation Issue</h3>
             <p className="text-xs text-red-700 dark:text-red-300 leading-relaxed">{errorMsg}</p>
           </div>
-          <div className="flex items-center justify-center gap-3 pt-2">
-            <button
-              type="button"
-              onClick={() => {
-                setStatus("idle");
-                setErrorMsg("");
-                setValidationError(null);
-              }}
-              className="inline-flex items-center gap-2 px-4 py-2.5 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold rounded-xl transition-all border border-slate-200 dark:border-slate-700 shadow-2xs"
-            >
-              <ArrowLeft className="w-3.5 h-3.5" />
-              <span>Back to Setup</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setErrorMsg("");
-                handleGenerateQuestions();
-              }}
-              className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#0B1A33] hover:bg-[#16233C] dark:bg-blue-600 dark:hover:bg-blue-700 text-white text-xs font-semibold rounded-xl transition-all shadow-xs"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>Try Again</span>
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={handleGenerateQuestions}
+            className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#0B1A33] hover:bg-[#16233C] dark:bg-blue-600 dark:hover:bg-blue-700 text-white text-xs font-semibold rounded-xl transition-all shadow-xs"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Try Again</span>
+          </button>
         </div>
       </div>
     );

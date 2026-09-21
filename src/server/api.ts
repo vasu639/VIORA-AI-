@@ -1,12 +1,6 @@
 import express from "express";
 import { GoogleGenAI } from "@google/genai";
 import mammoth from "mammoth";
-// @ts-ignore
-import * as pdfParseModule from "pdf-parse";
-const PDFParse =
-  (pdfParseModule as any).PDFParse ||
-  (pdfParseModule as any).default?.PDFParse ||
-  (pdfParseModule as any).default;
 
 const PORT = 3000;
 
@@ -36,43 +30,42 @@ async function generateContentWithRetry(params: {
   preferredModel?: string;
 }) {
   const ai = getAiClient();
-  // Valid, highly performant and accessible Gemini models:
-  // 1. gemini-3.1-flash-lite: Ultra-reliable, blazing fast (~1.2s), 1M token context
-  // 2. gemini-flash-latest: Full flash model alias
-  // 3. gemini-3.8-flash: Multimodal workhorse
+  // Valid, highly capable Gemini models:
+  // 1. gemini-3.8-flash (Primary workhorse with native 1M context, multimodal PDF/image parsing)
+  // 2. gemini-3.1-pro-preview (Advanced complex STEM reasoning and syllabus parsing)
+  // 3. gemini-3.1-flash-lite (Fast lightweight fallback)
   const models = [
-    params.preferredModel || "gemini-3.1-flash-lite",
-    "gemini-flash-latest",
-    "gemini-3.8-flash",
+    params.preferredModel || "gemini-3.8-flash",
+    "gemini-3.1-pro-preview",
+    "gemini-3.1-flash-lite",
   ];
 
   let lastError: any = null;
   for (const model of models) {
-    try {
-      console.log(`[Gemini] Calling model ${model}...`);
-      const callPromise = ai.models.generateContent({
-        model,
-        contents: params.contents,
-        config: params.config,
-      });
-
-      let timer: any;
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error(`Model ${model} timed out after 12s`)),
-          12000
-        );
-      });
-
-      const response = await Promise.race([callPromise, timeoutPromise]).finally(() => {
-        clearTimeout(timer);
-      });
-
-      console.log(`[Gemini] Model ${model} succeeded!`);
-      return response;
-    } catch (err: any) {
-      lastError = err;
-      console.warn(`[Gemini] Model ${model} failed:`, err?.message || err);
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        console.log(`[Gemini] Calling model ${model} (attempt ${attempt})...`);
+        const response = await ai.models.generateContent({
+          model,
+          contents: params.contents,
+          config: params.config,
+        });
+        console.log(`[Gemini] Model ${model} succeeded!`);
+        return response;
+      } catch (err: any) {
+        lastError = err;
+        console.warn(`[Gemini] Attempt ${attempt} with ${model} failed:`, err?.message || err);
+        // If quota exhausted or rate limit hit on this model, instantly switch to next model
+        if (
+          err?.message?.includes("429") ||
+          err?.message?.includes("RESOURCE_EXHAUSTED") ||
+          err?.message?.includes("quota")
+        ) {
+          console.warn(`[Gemini] Model ${model} quota exhausted, cascading to next model...`);
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 1000));
+      }
     }
   }
   throw lastError;
@@ -103,12 +96,8 @@ export function createApiApp() {
 
   // Generate Questions
   app.post(["/api/generate-questions", "/generate-questions"], async (req, res) => {
-    let extractedText = "";
-    let cleanBase64 = "";
-    let detectedMime = "";
-    const body = req.body || {};
     const {
-      mode = "viva",
+      mode,
       subMode,
       courseName,
       level,
@@ -117,135 +106,100 @@ export function createApiApp() {
       fileName,
       mimeType,
       textContent,
-    } = body;
+    } = req.body;
+
+    if (!fileBase64 && !textContent) {
+      return res.status(400).json({ error: "No document or file was attached." });
+    }
 
     const questionCount = Math.min(Math.max(Number(numQuestions) || 6, 3), 10);
+    let extractedText = textContent ? String(textContent).trim() : "";
+    let cleanBase64 = "";
+    let detectedMime = mimeType || "";
+
+    // Process fileBase64 if provided
+    if (fileBase64 && typeof fileBase64 === "string") {
+      let rawBase64 = fileBase64;
+      if (rawBase64.includes(",")) {
+        const parts = rawBase64.split(",");
+        rawBase64 = parts[1];
+        const match = parts[0].match(/:(.*?);/);
+        if (match && match[1]) {
+          detectedMime = match[1];
+        }
+      }
+      cleanBase64 = rawBase64.replace(/\s+/g, "");
+
+      const lowerFileName = (fileName || "").toLowerCase();
+      const isDocx =
+        lowerFileName.endsWith(".docx") ||
+        detectedMime.includes("wordprocessingml") ||
+        detectedMime.includes("docx");
+
+      // Extract text from Microsoft Word documents using mammoth
+      if (isDocx && cleanBase64) {
+        try {
+          const docxBuffer = Buffer.from(cleanBase64, "base64");
+          const result = await mammoth.extractRawText({ buffer: docxBuffer });
+          if (result.value && result.value.trim()) {
+            extractedText = (extractedText ? extractedText + "\n\n" : "") + result.value.trim();
+            console.log(`[Docx Parser] Successfully extracted ${result.value.length} characters from Word syllabus/resume.`);
+            cleanBase64 = ""; // Word document now converted to text
+          }
+        } catch (docxErr) {
+          console.warn("[Docx Parser] Mammoth extraction failed, continuing with file data:", docxErr);
+        }
+      }
+
+      // Extract plain text / markdown files directly
+      const isPlainText =
+        lowerFileName.endsWith(".txt") ||
+        lowerFileName.endsWith(".md") ||
+        detectedMime.startsWith("text/");
+
+      if (isPlainText && cleanBase64) {
+        try {
+          const decoded = Buffer.from(cleanBase64, "base64").toString("utf-8");
+          if (decoded && decoded.trim()) {
+            extractedText = (extractedText ? extractedText + "\n\n" : "") + decoded.trim();
+            cleanBase64 = "";
+          }
+        } catch (txtErr) {
+          console.warn("[Text Parser] Plain text decoding error:", txtErr);
+        }
+      }
+
+      // Ensure valid MIME type for Gemini inlineData
+      if (cleanBase64) {
+        if (!detectedMime || detectedMime === "application/octet-stream") {
+          if (lowerFileName.endsWith(".pdf")) {
+            detectedMime = "application/pdf";
+          } else if (lowerFileName.endsWith(".png")) {
+            detectedMime = "image/png";
+          } else if (lowerFileName.endsWith(".jpg") || lowerFileName.endsWith(".jpeg")) {
+            detectedMime = "image/jpeg";
+          } else if (lowerFileName.endsWith(".webp")) {
+            detectedMime = "image/webp";
+          } else {
+            detectedMime = "application/pdf";
+          }
+        }
+      }
+    }
 
     try {
-      if (!fileBase64 && !textContent && !courseName) {
-        return res.status(400).json({ error: "Please upload a syllabus or resume document, or enter a subject name." });
-      }
-
-      extractedText = textContent ? String(textContent).trim() : "";
-      detectedMime = mimeType || "";
-
-      // Process fileBase64 if provided
-      if (fileBase64 && typeof fileBase64 === "string") {
-        let rawBase64 = fileBase64;
-        if (rawBase64.includes(",")) {
-          const parts = rawBase64.split(",");
-          rawBase64 = parts[1];
-          const match = parts[0].match(/:(.*?);/);
-          if (match && match[1]) {
-            detectedMime = match[1];
-          }
-        }
-        cleanBase64 = rawBase64.replace(/\s+/g, "");
-
-        const lowerFileName = (fileName || "").toLowerCase();
-        const isDocx =
-          lowerFileName.endsWith(".docx") ||
-          detectedMime.includes("wordprocessingml") ||
-          detectedMime.includes("docx");
-
-        // Extract text from Microsoft Word documents using mammoth
-        if (isDocx && cleanBase64) {
-          try {
-            const docxBuffer = Buffer.from(cleanBase64, "base64");
-            const result = await mammoth.extractRawText({ buffer: docxBuffer });
-            if (result.value && result.value.trim()) {
-              extractedText = (extractedText ? extractedText + "\n\n" : "") + result.value.trim();
-              console.log(`[Docx Parser] Successfully extracted ${result.value.length} characters from Word syllabus/resume.`);
-              cleanBase64 = ""; // Word document now converted to text
-            }
-          } catch (docxErr) {
-            console.warn("[Docx Parser] Mammoth extraction failed, continuing with file data:", docxErr);
-          }
-        }
-
-        // Extract text from PDF documents using PDFParse
-        const isPdf =
-          lowerFileName.endsWith(".pdf") ||
-          detectedMime === "application/pdf" ||
-          (cleanBase64 && cleanBase64.length > 50);
-
-        if (isPdf && cleanBase64) {
-          try {
-            const pdfBuffer = Buffer.from(cleanBase64, "base64");
-            const headerSnippet = pdfBuffer.slice(0, 10).toString("binary");
-            if (
-              headerSnippet.includes("%PDF") ||
-              lowerFileName.endsWith(".pdf") ||
-              detectedMime === "application/pdf"
-            ) {
-              const parser = new PDFParse({ data: pdfBuffer });
-              const pdfResult = await parser.getText();
-              if (pdfResult && pdfResult.text && pdfResult.text.trim()) {
-                const cleanedPdfText = pdfResult.text.replace(/\r\n/g, "\n").trim();
-                extractedText = (extractedText ? extractedText + "\n\n" : "") + cleanedPdfText;
-                console.log(
-                  `[PDF Parser] Successfully extracted ${cleanedPdfText.length} characters of text from PDF syllabus/resume.`
-                );
-                // Clear cleanBase64 if text extraction yielded substantial text to avoid multi-megabyte payloads to Gemini
-                if (cleanedPdfText.length > 50) {
-                  cleanBase64 = "";
-                }
-              }
-            }
-          } catch (pdfErr) {
-            console.warn("[PDF Parser] PDFParse extraction note, will keep base64 for Gemini multimodal:", pdfErr);
-          }
-        }
-
-        // Extract plain text / markdown files directly
-        const isPlainText =
-          lowerFileName.endsWith(".txt") ||
-          lowerFileName.endsWith(".md") ||
-          detectedMime.startsWith("text/");
-
-        if (isPlainText && cleanBase64) {
-          try {
-            const decoded = Buffer.from(cleanBase64, "base64").toString("utf-8");
-            if (decoded && decoded.trim()) {
-              extractedText = (extractedText ? extractedText + "\n\n" : "") + decoded.trim();
-              cleanBase64 = "";
-            }
-          } catch (txtErr) {
-            console.warn("[Text Parser] Plain text decoding error:", txtErr);
-          }
-        }
-
-        // Ensure valid MIME type for Gemini inlineData
-        if (cleanBase64) {
-          if (!detectedMime || detectedMime === "application/octet-stream") {
-            if (lowerFileName.endsWith(".pdf")) {
-              detectedMime = "application/pdf";
-            } else if (lowerFileName.endsWith(".png")) {
-              detectedMime = "image/png";
-            } else if (lowerFileName.endsWith(".jpg") || lowerFileName.endsWith(".jpeg")) {
-              detectedMime = "image/jpeg";
-            } else if (lowerFileName.endsWith(".webp")) {
-              detectedMime = "image/webp";
-            } else {
-              detectedMime = "application/pdf";
-            }
-          }
-        }
-      }
-
       let prompt = "";
       if (mode === "viva") {
         prompt = `You are an experienced, highly qualified university examiner conducting an official oral viva-voce examination.
 The candidate has provided their official syllabus/curriculum for: "${courseName || "Attached Syllabus"}".
 Exam Difficulty: ${level || "Intermediate"}.
 
-CRITICAL MANDATORY INSTRUCTIONS (STRICT SYLLABUS GROUNDING):
-1. THOROUGHLY READ THE ATTACHED SYLLABUS DOCUMENT:
-   - Identify the specific subject name, units, modules, chapters, theories, equations, experiments, laws, or case studies detailed in the document.
-   - EVERY SINGLE QUESTION MUST BE 100% GROUNDED in the specific academic subject of this syllabus.
-   - STRICTLY FORBIDDEN: DO NOT ask generic questions or vague structural questions like "Could you walk me through the foundational theoretical framework", "When applying key analytical methodologies", or generic CS/programming questions for non-CS subjects.
-   - Instead, mention the SPECIFIC concept, chapter, law, formula, mechanism, or unit from the document (e.g., if thermodynamics: Carnot cycle, entropy, Rankine cycle; if law: constitutional remedies, tort negligence; if medicine: cranial nerves, glycolysis pathway; if civil engineering: Bernoulli theorem, Pelton turbine).
-   - Distribute the ${questionCount} questions across the different units/chapters found in the syllabus so the entire course is represented.
+CRITICAL MANDATORY INSTRUCTIONS (STRICT GROUNDING):
+1. THOROUGHLY READ THE ATTACHED SYLLABUS:
+   - Identify the specific Units, Modules, Chapters, Theories, Equations, Mechanisms, and Learning Outcomes detailed in the syllabus.
+   - Every single question you create MUST be 100% grounded in the specific academic subject of this syllabus.
+   - Do NOT ask generic computer science or operating systems questions UNLESS the attached syllabus itself is explicitly about operating systems or computer science. If this syllabus is about Law, Medicine, Chemistry, History, Civil Engineering, Business, Finance, etc., every question must strictly be about that exact field.
+   - Distribute the ${questionCount} questions across the different units/modules found in the syllabus so the entire syllabus is represented.
 
 2. DIFFICULTY LEVEL (${level || "Intermediate"}):
    - Beginner: Definitions, foundational concepts, core mechanisms, standard terminology.
@@ -253,19 +207,19 @@ CRITICAL MANDATORY INSTRUCTIONS (STRICT SYLLABUS GROUNDING):
    - Advanced: In-depth design decisions, edge cases, trade-offs, theoretical limitations, and critical evaluation.
 
 3. CONVERSATIONAL ORAL VIVA FORMAT:
-   - Frame questions the way a live professor speaks aloud across a table (e.g., "In Unit 2 on [Topic], how does [Specific Mechanism] work?", "Looking at your syllabus topic [Topic], what is the fundamental difference between [A] and [B]?").
+   - Frame questions the way a live professor speaks aloud across a table (e.g., "Looking at Unit 2 on ..., could you explain how ...", "In your syllabus topic ..., what is the key distinction between ...?").
    - Keep questions focused and concise (1–3 sentences each).
 
 Return ONLY valid JSON matching this exact structure:
 {
-  "detectedSubject": "<Exact subject or course title detected from the syllabus>",
+  "detectedSubject": "<Subject or course name detected from the syllabus>",
   "detectedUnits": ["<Unit 1 title>", "<Unit 2 title>", ...],
   "questions": [
     {
       "id": 1,
       "topic": "<Exact unit or topic from the uploaded syllabus>",
-      "basedOn": "<Syllabus unit or chapter name>",
-      "question": "<Conversational viva question directly testing this specific topic by name>"
+      "basedOn": "<Syllabus reference or unit name>",
+      "question": "<Conversational viva question directly testing this topic>"
     }
   ]
 }`;
@@ -274,32 +228,31 @@ Return ONLY valid JSON matching this exact structure:
         prompt = `You are an expert senior interviewer conducting a ${selectedSubMode} interview.
 The candidate has provided their resume/CV or background profile.
 
-CRITICAL MANDATORY INSTRUCTIONS (STRICT RESUME GROUNDING):
-1. THOROUGHLY READ THE ATTACHED RESUME / CV DOCUMENT:
-   - Identify the candidate's actual projects, work experience, company names, tools, languages, databases, cloud platforms, and listed achievements.
-   - EVERY SINGLE QUESTION MUST BE DIRECTLY AND UNMISTAKABLY GROUNDED in what is actually written on their resume.
-   - STRICTLY FORBIDDEN: DO NOT ask generic questions (such as "tell me about a challenge" or "how do you monitor production health" without citing their actual project).
-   - In each question or its "basedOn" field, cite their SPECIFIC project title, company, or technology (e.g., "In your project [Project Name], how did you implement...", "At [Company Name], you mentioned using [Technology], what were the trade-offs...?").
+CRITICAL MANDATORY INSTRUCTIONS (STRICT GROUNDING):
+1. THOROUGHLY READ THE ATTACHED RESUME / CV:
+   - Extract the candidate's actual projects, work experience, company names, tools, languages, frameworks, and quantifiable achievements.
+   - Every question you generate MUST be directly and unmistakably grounded in what is actually written on their resume.
+   - Do NOT ask generic textbook questions that could be asked to anyone. Mention the specific project name, company, or technology from their resume in the question or in the "basedOn" field.
 
 2. STYLE GUIDE FOR ${selectedSubMode.toUpperCase()}:
-   - Technical: Deep dive into the architecture, libraries, or engineering decisions in their listed projects.
-   - Behavioral: STAR-format question anchored to a specific team or achievement on their resume.
-   - Managerial: Leadership, system scale, or coordination in their past roles.
-   - Rapid Fire: Concise questions verifying technical competence across skills listed on their CV.
+   - Technical: Probe a specific architecture, tool, or engineering challenge from one of their listed projects. Ask why they chose that approach and how they handled trade-offs, performance, or edge cases.
+   - Behavioral: Ask STAR-format questions (Situation, Task, Action, Result) linked to a specific team, role, or initiative listed on their resume.
+   - Managerial: Ask about leadership, project scoping, technical debt, or stakeholder management scaled to their actual seniority level.
+   - Rapid Fire: Short, direct questions (30-second answers) covering their listed technical stack and skills.
 
 3. QUESTION COUNT:
    - Generate exactly ${questionCount} questions.
 
 Return ONLY valid JSON matching this exact structure:
 {
-  "detectedCandidateName": "<Candidate name detected from resume>",
+  "detectedCandidateName": "<Candidate name or 'Candidate'>",
   "detectedKeySkills": ["<Skill 1>", "<Skill 2>", "<Project 1>", ...],
   "questions": [
     {
       "id": 1,
-      "topic": "<Role, Project, or Skill Area from Resume>",
-      "basedOn": "<Exact project, company, or skill listed on their resume>",
-      "question": "<Targeted interview question referencing their actual project or role>"
+      "topic": "<Role, Project, or Skill Area>",
+      "basedOn": "<Exact project, company, or listed achievement from their resume>",
+      "question": "<Targeted interview question referencing their background>"
     }
   ]
 }`;
@@ -319,7 +272,7 @@ Return ONLY valid JSON matching this exact structure:
 
       if (extractedText) {
         contents.push({
-          text: `USER UPLOADED DOCUMENT CONTENT (${mode === "viva" ? "SYLLABUS / CURRICULUM" : "RESUME / CV"}):\n\n${extractedText.slice(0, 60000)}`,
+          text: `DOCUMENT CONTENT (SYLLABUS / RESUME TEXT):\n${extractedText}`,
         });
       }
 
@@ -376,37 +329,20 @@ Return ONLY valid JSON matching this exact structure:
     } catch (err: any) {
       console.error("Error generating questions with Gemini:", err);
 
-      // If multimodal or large payload failed, attempt text-prompt generation using extracted text
-      if (extractedText || courseName) {
+      // If multimodal failed (e.g. corrupted PDF or parsing error), try text-guided emergency generation
+      if (courseName || extractedText) {
         try {
-          console.log("[Gemini Fallback] Attempting text-prompt generation with extracted document text...");
+          console.log("[Gemini Fallback] Attempting text-prompt generation for:", courseName || "Syllabus");
           const textOnlyPrompt =
             mode === "viva"
-              ? `You are an oral viva examiner. The student is taking an examination in: "${courseName || "Attached Syllabus"}". Difficulty: ${level || "Intermediate"}.
-SYLLABUS CONTENT:
-${extractedText.slice(0, 20000)}
-
-Generate ${questionCount} oral viva questions specifically on the units, laws, mechanisms, and topics in this syllabus.
-Do NOT ask generic structural questions. Every question MUST explicitly mention specific topics from the syllabus above.
-Return JSON:
-{
-  "detectedSubject": "${courseName || "Course Syllabus"}",
-  "questions": [
-    { "id": 1, "topic": "<Syllabus Topic>", "basedOn": "<Unit>", "question": "<Viva question testing this syllabus topic>" }
-  ]
-}`
+              ? `You are an oral viva examiner. The student is taking an examination in the course: "${courseName || "Subject Syllabus"}". Difficulty: ${level || "Intermediate"}.
+${extractedText ? `Syllabus notes:\n${extractedText.slice(0, 4000)}\n` : ""}
+Generate ${questionCount} oral viva questions specifically on "${courseName || "this subject"}". Do NOT ask generic computer science or operating systems questions unless the course is explicitly computer science.
+Return JSON: {"questions":[{"id":1,"topic":"<topic>","basedOn":"${courseName || "Course Syllabus"}","question":"<question>"}]}`
               : `You are an interviewer conducting a ${subMode || "technical"} interview.
-CANDIDATE RESUME:
-${extractedText.slice(0, 20000)}
-
-Generate ${questionCount} interview questions specifically tailored to their listed projects, tools, and experience.
-Do NOT ask generic questions without naming their actual project or skill.
-Return JSON:
-{
-  "questions": [
-    { "id": 1, "topic": "<Project/Skill>", "basedOn": "<Project Name>", "question": "<Interview question referencing their project>" }
-  ]
-}`;
+${extractedText ? `Candidate background notes:\n${extractedText.slice(0, 4000)}\n` : ""}
+Generate ${questionCount} interview questions tailored to their background.
+Return JSON: {"questions":[{"id":1,"topic":"Technical","basedOn":"Candidate Background","question":"<question>"}]}`;
 
           const textResp = await generateContentWithRetry({
             contents: [{ text: textOnlyPrompt }],
@@ -421,19 +357,15 @@ Return JSON:
               topic: q.topic || courseName || "Syllabus Topic",
               basedOn: q.basedOn || courseName || "Course Syllabus",
             }));
-            return res.status(200).json({
-              questions: normalized,
-              detectedSubject: parsed.detectedSubject || courseName,
-              detectedUnits: Array.isArray(parsed.detectedUnits) ? parsed.detectedUnits : undefined,
-            });
+            return res.status(200).json({ questions: normalized, detectedSubject: courseName });
           }
         } catch (fbErr) {
           console.warn("[Gemini Fallback] Text fallback also failed:", fbErr);
         }
       }
 
-      // Subject & Document-Aware Resilient Fallback (extracts actual units from text if available)
-      const fallbackQs = getResilientFallbackQuestions(mode, subMode, courseName, level, numQuestions, extractedText);
+      // Smart Subject-Aware Resilient Fallback (ensures candidate is NEVER given irrelevant OS questions)
+      const fallbackQs = getResilientFallbackQuestions(mode, subMode, courseName, level, numQuestions);
       return res.status(200).json({
         questions: fallbackQs,
         detectedSubject: courseName || (mode === "viva" ? "Course Syllabus" : "Candidate Resume"),
@@ -442,105 +374,57 @@ Return JSON:
     }
   });
 
-function extractTopicsFromText(text: string): string[] {
-  if (!text) return [];
-  const lines = text
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l.length > 4 && l.length < 90);
-
-  const matchedTopics: string[] = [];
-  for (const line of lines) {
-    // Match common syllabus/resume heading patterns
-    if (
-      /^(?:unit|module|chapter|topic|section|part|\d+[\.\)]|\*|-|#+)\s+/i.test(line) ||
-      /(?:mechanics|thermodynamics|chemistry|biology|anatomy|law|physics|algorithm|database|network|architecture|system|protocol|react|python|java|aws|docker|microservices|pipeline|compiler|signal)/i.test(line)
-    ) {
-      const cleaned = line
-        .replace(/^(?:unit|module|chapter|topic|section|part|\d+[\.\)]|\*|-|#+)\s*[:.-]?\s*/i, "")
-        .replace(/[:;]$/, "")
-        .trim();
-      if (cleaned.length > 4 && cleaned.length < 70 && !matchedTopics.includes(cleaned)) {
-        matchedTopics.push(cleaned);
-      }
-    }
-  }
-  return matchedTopics;
-}
-
 function getResilientFallbackQuestions(
   mode: string,
   subMode: string = "technical",
   courseName: string = "",
   level: string = "Intermediate",
-  numQuestions: number = 5,
-  extractedText: string = ""
+  numQuestions: number = 5
 ) {
   const count = Math.min(Math.max(Number(numQuestions) || 5, 3), 10);
-  const subject = courseName.trim() || (mode === "viva" ? "this academic syllabus" : "your technical portfolio");
-  const extractedTopics = extractTopicsFromText(extractedText);
+  const subject = courseName.trim() || (mode === "viva" ? "this academic subject" : "your technical discipline");
 
   if (mode === "viva") {
-    // If topics were extracted from the user's document, build questions grounded in those specific topics
-    if (extractedTopics.length >= 2) {
-      return extractedTopics.slice(0, count).map((topic, idx) => ({
-        id: idx + 1,
-        topic: topic,
-        basedOn: `Syllabus: ${topic}`,
-        question: `Looking at your syllabus topic "${topic}", could you explain its fundamental mechanism, key principles, and practical application?`,
-      }));
-    }
-
     const list = [
       {
         id: 1,
-        topic: `${subject}: Core Principles`,
-        basedOn: `${subject} Syllabus`,
-        question: `In your study of ${subject}, what is the fundamental governing principle or law that forms the basis of this subject, and how is it applied in practice?`,
+        topic: `${subject}: Fundamental Principles`,
+        basedOn: `${subject} Core Concepts`,
+        question: `Could you walk me through the foundational theoretical framework of ${subject}, and explain how its core laws or principles govern practical problems in this field?`,
       },
       {
         id: 2,
-        topic: `${subject}: Key Mechanisms`,
-        basedOn: `${subject} Syllabus`,
-        question: `What is the primary step-by-step mechanism or workflow involved in the key processes of ${subject}? What are its key parameters and operating constraints?`,
+        topic: `${subject}: Methodologies & Mechanisms`,
+        basedOn: `${subject} Key Mechanisms`,
+        question: `When applying key analytical or experimental methodologies in ${subject}, what step-by-step mechanism is followed, and what are its primary assumptions or limitations?`,
       },
       {
         id: 3,
         topic: `${subject}: Comparative Analysis`,
-        basedOn: `${subject} Syllabus`,
-        question: `When analyzing different methodologies or models in ${subject}, how do you evaluate their trade-offs and select the most suitable approach for a given scenario?`,
+        basedOn: `${subject} Applied Theories`,
+        question: `In ${subject}, how do you evaluate competing models, approaches, or hypotheses when given real-world constraints? What criteria dictate the optimal choice?`,
       },
       {
         id: 4,
-        topic: `${subject}: Real-World Application`,
-        basedOn: `${subject} Syllabus`,
-        question: `Can you discuss a practical application or experimental implementation of ${subject} and explain how edge cases or anomalies are handled?`,
+        topic: `${subject}: Practical Application & Edge Cases`,
+        basedOn: `${subject} Case Studies`,
+        question: `Can you analyze a notable case study, phenomenon, or practical scenario in ${subject} and explain how anomalous data or edge conditions are resolved?`,
       },
       {
         id: 5,
-        topic: `${subject}: Advanced Analysis`,
-        basedOn: `${subject} Syllabus`,
-        question: `At the ${level} level of ${subject}, what are the major theoretical limitations or recent advances that challenge traditional solutions?`,
+        topic: `${subject}: Advanced Synthesis`,
+        basedOn: `${subject} Advanced Principles`,
+        question: `At the ${level} level of ${subject}, how do recent developments or advanced paradigms challenge traditional solutions in the literature?`,
       },
       {
         id: 6,
-        topic: `${subject}: Critical Defense`,
-        basedOn: `${subject} Syllabus`,
-        question: `If an examiner asks you to defend a core derivation or conclusion in ${subject}, what primary evidence or formulas would you use to support your answer?`,
+        topic: `${subject}: Critical Evaluation`,
+        basedOn: `${subject} Research & Implementation`,
+        question: `If an examiner or peer critiques a key solution or derivation in ${subject}, what empirical evidence or theoretical proofs would you cite to defend your conclusions?`,
       },
     ];
     return list.slice(0, count);
   } else {
-    // Resume interview mode
-    if (extractedTopics.length >= 2) {
-      return extractedTopics.slice(0, count).map((topic, idx) => ({
-        id: idx + 1,
-        topic: topic,
-        basedOn: `Resume: ${topic}`,
-        question: `On your resume, you highlighted "${topic}". Could you walk me through your implementation, technical decisions, and the primary challenges you solved?`,
-      }));
-    }
-
     if (subMode === "behavioral") {
       const list = [
         { id: 1, basedOn: "Stakeholder Alignment & Ambiguity", question: "Describe a project on your resume where specifications were unclear or changed late. How did you establish consensus and deliver?" },
@@ -1118,20 +1002,6 @@ Return ONLY valid JSON in this exact structure:
         oralPresenceTips: "Speak with measured pacing, keep eye contact aligned with the camera, and pause 1 second before answering.",
       });
     }
-  });
-
-  // Global Express JSON error handler to prevent HTML error leak on payload too large or parse errors
-  app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
-    if (res.headersSent) {
-      return next(err);
-    }
-    console.error("[API Unhandled Error]", err?.message || err);
-    const statusCode = typeof err?.status === "number" ? err.status : (err?.type === "entity.too.large" ? 413 : 500);
-    const errorMessage =
-      err?.type === "entity.too.large"
-        ? "Uploaded file is too large for the network payload. Please select a smaller PDF or paste syllabus text."
-        : (err?.message || "An unexpected server error occurred.");
-    res.status(statusCode).json({ error: errorMessage });
   });
 
   return app;
