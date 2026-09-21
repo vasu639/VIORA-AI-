@@ -103,8 +103,12 @@ export function createApiApp() {
 
   // Generate Questions
   app.post(["/api/generate-questions", "/generate-questions"], async (req, res) => {
+    let extractedText = "";
+    let cleanBase64 = "";
+    let detectedMime = "";
+    const body = req.body || {};
     const {
-      mode,
+      mode = "viva",
       subMode,
       courseName,
       level,
@@ -113,122 +117,122 @@ export function createApiApp() {
       fileName,
       mimeType,
       textContent,
-    } = req.body;
-
-    if (!fileBase64 && !textContent) {
-      return res.status(400).json({ error: "No document or file was attached." });
-    }
+    } = body;
 
     const questionCount = Math.min(Math.max(Number(numQuestions) || 6, 3), 10);
-    let extractedText = textContent ? String(textContent).trim() : "";
-    let cleanBase64 = "";
-    let detectedMime = mimeType || "";
-
-    // Process fileBase64 if provided
-    if (fileBase64 && typeof fileBase64 === "string") {
-      let rawBase64 = fileBase64;
-      if (rawBase64.includes(",")) {
-        const parts = rawBase64.split(",");
-        rawBase64 = parts[1];
-        const match = parts[0].match(/:(.*?);/);
-        if (match && match[1]) {
-          detectedMime = match[1];
-        }
-      }
-      cleanBase64 = rawBase64.replace(/\s+/g, "");
-
-      const lowerFileName = (fileName || "").toLowerCase();
-      const isDocx =
-        lowerFileName.endsWith(".docx") ||
-        detectedMime.includes("wordprocessingml") ||
-        detectedMime.includes("docx");
-
-      // Extract text from Microsoft Word documents using mammoth
-      if (isDocx && cleanBase64) {
-        try {
-          const docxBuffer = Buffer.from(cleanBase64, "base64");
-          const result = await mammoth.extractRawText({ buffer: docxBuffer });
-          if (result.value && result.value.trim()) {
-            extractedText = (extractedText ? extractedText + "\n\n" : "") + result.value.trim();
-            console.log(`[Docx Parser] Successfully extracted ${result.value.length} characters from Word syllabus/resume.`);
-            cleanBase64 = ""; // Word document now converted to text
-          }
-        } catch (docxErr) {
-          console.warn("[Docx Parser] Mammoth extraction failed, continuing with file data:", docxErr);
-        }
-      }
-
-      // Extract text from PDF documents using PDFParse
-      const isPdf =
-        lowerFileName.endsWith(".pdf") ||
-        detectedMime === "application/pdf" ||
-        (cleanBase64 && cleanBase64.length > 50);
-
-      if (isPdf && cleanBase64) {
-        try {
-          const pdfBuffer = Buffer.from(cleanBase64, "base64");
-          const headerSnippet = pdfBuffer.slice(0, 10).toString("binary");
-          if (
-            headerSnippet.includes("%PDF") ||
-            lowerFileName.endsWith(".pdf") ||
-            detectedMime === "application/pdf"
-          ) {
-            const parser = new PDFParse({ data: pdfBuffer });
-            const pdfResult = await parser.getText();
-            if (pdfResult && pdfResult.text && pdfResult.text.trim()) {
-              const cleanedPdfText = pdfResult.text.replace(/\r\n/g, "\n").trim();
-              extractedText = (extractedText ? extractedText + "\n\n" : "") + cleanedPdfText;
-              console.log(
-                `[PDF Parser] Successfully extracted ${cleanedPdfText.length} characters of text from PDF syllabus/resume.`
-              );
-              // Clear cleanBase64 if text extraction yielded substantial text to avoid multi-megabyte payloads to Gemini
-              if (cleanedPdfText.length > 50) {
-                cleanBase64 = "";
-              }
-            }
-          }
-        } catch (pdfErr) {
-          console.warn("[PDF Parser] PDFParse extraction note, will keep base64 for Gemini multimodal:", pdfErr);
-        }
-      }
-
-      // Extract plain text / markdown files directly
-      const isPlainText =
-        lowerFileName.endsWith(".txt") ||
-        lowerFileName.endsWith(".md") ||
-        detectedMime.startsWith("text/");
-
-      if (isPlainText && cleanBase64) {
-        try {
-          const decoded = Buffer.from(cleanBase64, "base64").toString("utf-8");
-          if (decoded && decoded.trim()) {
-            extractedText = (extractedText ? extractedText + "\n\n" : "") + decoded.trim();
-            cleanBase64 = "";
-          }
-        } catch (txtErr) {
-          console.warn("[Text Parser] Plain text decoding error:", txtErr);
-        }
-      }
-
-      // Ensure valid MIME type for Gemini inlineData
-      if (cleanBase64) {
-        if (!detectedMime || detectedMime === "application/octet-stream") {
-          if (lowerFileName.endsWith(".pdf")) {
-            detectedMime = "application/pdf";
-          } else if (lowerFileName.endsWith(".png")) {
-            detectedMime = "image/png";
-          } else if (lowerFileName.endsWith(".jpg") || lowerFileName.endsWith(".jpeg")) {
-            detectedMime = "image/jpeg";
-          } else if (lowerFileName.endsWith(".webp")) {
-            detectedMime = "image/webp";
-          } else {
-            detectedMime = "application/pdf";
-          }
-        }
-      }
-    }
 
     try {
+      if (!fileBase64 && !textContent && !courseName) {
+        return res.status(400).json({ error: "Please upload a syllabus or resume document, or enter a subject name." });
+      }
+
+      extractedText = textContent ? String(textContent).trim() : "";
+      detectedMime = mimeType || "";
+
+      // Process fileBase64 if provided
+      if (fileBase64 && typeof fileBase64 === "string") {
+        let rawBase64 = fileBase64;
+        if (rawBase64.includes(",")) {
+          const parts = rawBase64.split(",");
+          rawBase64 = parts[1];
+          const match = parts[0].match(/:(.*?);/);
+          if (match && match[1]) {
+            detectedMime = match[1];
+          }
+        }
+        cleanBase64 = rawBase64.replace(/\s+/g, "");
+
+        const lowerFileName = (fileName || "").toLowerCase();
+        const isDocx =
+          lowerFileName.endsWith(".docx") ||
+          detectedMime.includes("wordprocessingml") ||
+          detectedMime.includes("docx");
+
+        // Extract text from Microsoft Word documents using mammoth
+        if (isDocx && cleanBase64) {
+          try {
+            const docxBuffer = Buffer.from(cleanBase64, "base64");
+            const result = await mammoth.extractRawText({ buffer: docxBuffer });
+            if (result.value && result.value.trim()) {
+              extractedText = (extractedText ? extractedText + "\n\n" : "") + result.value.trim();
+              console.log(`[Docx Parser] Successfully extracted ${result.value.length} characters from Word syllabus/resume.`);
+              cleanBase64 = ""; // Word document now converted to text
+            }
+          } catch (docxErr) {
+            console.warn("[Docx Parser] Mammoth extraction failed, continuing with file data:", docxErr);
+          }
+        }
+
+        // Extract text from PDF documents using PDFParse
+        const isPdf =
+          lowerFileName.endsWith(".pdf") ||
+          detectedMime === "application/pdf" ||
+          (cleanBase64 && cleanBase64.length > 50);
+
+        if (isPdf && cleanBase64) {
+          try {
+            const pdfBuffer = Buffer.from(cleanBase64, "base64");
+            const headerSnippet = pdfBuffer.slice(0, 10).toString("binary");
+            if (
+              headerSnippet.includes("%PDF") ||
+              lowerFileName.endsWith(".pdf") ||
+              detectedMime === "application/pdf"
+            ) {
+              const parser = new PDFParse({ data: pdfBuffer });
+              const pdfResult = await parser.getText();
+              if (pdfResult && pdfResult.text && pdfResult.text.trim()) {
+                const cleanedPdfText = pdfResult.text.replace(/\r\n/g, "\n").trim();
+                extractedText = (extractedText ? extractedText + "\n\n" : "") + cleanedPdfText;
+                console.log(
+                  `[PDF Parser] Successfully extracted ${cleanedPdfText.length} characters of text from PDF syllabus/resume.`
+                );
+                // Clear cleanBase64 if text extraction yielded substantial text to avoid multi-megabyte payloads to Gemini
+                if (cleanedPdfText.length > 50) {
+                  cleanBase64 = "";
+                }
+              }
+            }
+          } catch (pdfErr) {
+            console.warn("[PDF Parser] PDFParse extraction note, will keep base64 for Gemini multimodal:", pdfErr);
+          }
+        }
+
+        // Extract plain text / markdown files directly
+        const isPlainText =
+          lowerFileName.endsWith(".txt") ||
+          lowerFileName.endsWith(".md") ||
+          detectedMime.startsWith("text/");
+
+        if (isPlainText && cleanBase64) {
+          try {
+            const decoded = Buffer.from(cleanBase64, "base64").toString("utf-8");
+            if (decoded && decoded.trim()) {
+              extractedText = (extractedText ? extractedText + "\n\n" : "") + decoded.trim();
+              cleanBase64 = "";
+            }
+          } catch (txtErr) {
+            console.warn("[Text Parser] Plain text decoding error:", txtErr);
+          }
+        }
+
+        // Ensure valid MIME type for Gemini inlineData
+        if (cleanBase64) {
+          if (!detectedMime || detectedMime === "application/octet-stream") {
+            if (lowerFileName.endsWith(".pdf")) {
+              detectedMime = "application/pdf";
+            } else if (lowerFileName.endsWith(".png")) {
+              detectedMime = "image/png";
+            } else if (lowerFileName.endsWith(".jpg") || lowerFileName.endsWith(".jpeg")) {
+              detectedMime = "image/jpeg";
+            } else if (lowerFileName.endsWith(".webp")) {
+              detectedMime = "image/webp";
+            } else {
+              detectedMime = "application/pdf";
+            }
+          }
+        }
+      }
+
       let prompt = "";
       if (mode === "viva") {
         prompt = `You are an experienced, highly qualified university examiner conducting an official oral viva-voce examination.
@@ -1114,6 +1118,20 @@ Return ONLY valid JSON in this exact structure:
         oralPresenceTips: "Speak with measured pacing, keep eye contact aligned with the camera, and pause 1 second before answering.",
       });
     }
+  });
+
+  // Global Express JSON error handler to prevent HTML error leak on payload too large or parse errors
+  app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (res.headersSent) {
+      return next(err);
+    }
+    console.error("[API Unhandled Error]", err?.message || err);
+    const statusCode = typeof err?.status === "number" ? err.status : (err?.type === "entity.too.large" ? 413 : 500);
+    const errorMessage =
+      err?.type === "entity.too.large"
+        ? "Uploaded file is too large for the network payload. Please select a smaller PDF or paste syllabus text."
+        : (err?.message || "An unexpected server error occurred.");
+    res.status(statusCode).json({ error: errorMessage });
   });
 
   return app;
