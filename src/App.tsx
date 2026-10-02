@@ -10,10 +10,11 @@ import { AuthModal } from "./components/AuthModal";
 import { AuthScreen } from "./components/AuthScreen";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { ThemeProvider } from "./context/ThemeContext";
-import { AssessmentMode, SessionReport } from "./types";
+import { AssessmentMode, SessionReport, DifficultyLevel } from "./types";
 import { getSavedSessions, saveSessionToStorage } from "./lib/storage";
 import { fetchUserSessionsFromFirestore } from "./lib/firebase";
 import { VioraLogo } from "./components/VioraLogo";
+import { InitialDocConfig } from "./components/AssessmentFlow";
 
 function AppContent() {
   const { user, loading } = useAuth();
@@ -22,6 +23,7 @@ function AppContent() {
   const [improvementOpen, setImprovementOpen] = useState(false);
   const [savedSessions, setSavedSessions] = useState<SessionReport[]>([]);
   const [selectedReport, setSelectedReport] = useState<SessionReport | null>(null);
+  const [preloadedVivaDoc, setPreloadedVivaDoc] = useState<InitialDocConfig | null>(null);
 
   const refreshHistory = () => {
     const sessions = getSavedSessions();
@@ -56,7 +58,30 @@ function AppContent() {
 
   const handleSelectMode = (mode: AssessmentMode | null) => {
     setSelectedReport(null);
+    setPreloadedVivaDoc(null);
     setCurrentMode(mode);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const handleLaunchVivaWithDoc = (payload: {
+    file: File | null;
+    fileBase64: string | null;
+    textContent: string | null;
+    courseName: string;
+    difficulty: DifficultyLevel;
+    numQuestions: number;
+  }) => {
+    setSelectedReport(null);
+    setPreloadedVivaDoc({
+      file: payload.file,
+      fileBase64: payload.fileBase64,
+      textContent: payload.textContent,
+      courseName: payload.courseName,
+      difficulty: payload.difficulty,
+      numQuestions: payload.numQuestions,
+      autoStart: true,
+    });
+    setCurrentMode("viva");
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -120,8 +145,12 @@ function AppContent() {
           />
         ) : currentMode === "viva" ? (
           <Viva
-            onBackToHome={() => handleSelectMode(null)}
+            onBackToHome={() => {
+              setPreloadedVivaDoc(null);
+              handleSelectMode(null);
+            }}
             onSessionComplete={handleSessionComplete}
+            initialDocument={preloadedVivaDoc}
           />
         ) : currentMode === "interview" ? (
           <Interview
@@ -131,6 +160,7 @@ function AppContent() {
         ) : (
           <Landing
             onStartMode={handleSelectMode}
+            onLaunchVivaWithDoc={handleLaunchVivaWithDoc}
             onOpenHistory={() => setHistoryOpen(true)}
             onOpenImprovementReport={() => setImprovementOpen(true)}
             pastSessionCount={savedSessions.length}
@@ -170,7 +200,7 @@ function AppContent() {
           </div>
 
           <div className="flex items-center gap-4 text-[11px] text-slate-400 dark:text-slate-500">
-            <span>Harsh & Vasu</span>
+            <span>Vasu & Bhumi</span>
             <span>•</span>
             <span>Powered by Gemini 3.8 Flash</span>
             <span>•</span>

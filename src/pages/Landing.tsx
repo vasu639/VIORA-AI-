@@ -11,12 +11,21 @@ import {
   Zap,
   TrendingUp,
 } from "lucide-react";
-import { AssessmentMode } from "../types";
+import { AssessmentMode, DifficultyLevel } from "../types";
 import { VioraLogo } from "../components/VioraLogo";
 import { useAuth } from "../context/AuthContext";
+import { LandingFileInput } from "../components/LandingFileInput";
 
 interface LandingProps {
   onStartMode: (mode: AssessmentMode) => void;
+  onLaunchVivaWithDoc?: (payload: {
+    file: File | null;
+    fileBase64: string | null;
+    textContent: string | null;
+    courseName: string;
+    difficulty: DifficultyLevel;
+    numQuestions: number;
+  }) => void;
   onOpenHistory: () => void;
   onOpenImprovementReport?: () => void;
   pastSessionCount: number;
@@ -24,6 +33,7 @@ interface LandingProps {
 
 export const Landing: React.FC<LandingProps> = ({
   onStartMode,
+  onLaunchVivaWithDoc,
   onOpenHistory,
   onOpenImprovementReport,
   pastSessionCount,
@@ -67,6 +77,29 @@ export const Landing: React.FC<LandingProps> = ({
             </div>
           )}
         </div>
+      </div>
+
+      {/* Primary File Input Component for Strict Syllabus Ingestion */}
+      <div className="px-4">
+        <LandingFileInput
+          onLaunchViva={(payload) => {
+            if (onLaunchVivaWithDoc) {
+              onLaunchVivaWithDoc(payload);
+            } else {
+              onStartMode("viva");
+            }
+          }}
+          onSelectInterviewMode={() => onStartMode("interview")}
+        />
+      </div>
+
+      {/* Mode Navigation Divider */}
+      <div className="flex items-center gap-3 px-4">
+        <div className="flex-1 border-t border-slate-200 dark:border-slate-800" />
+        <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+          Or Select Assessment Track
+        </span>
+        <div className="flex-1 border-t border-slate-200 dark:border-slate-800" />
       </div>
 
       {/* The Two Main Mode Cards */}

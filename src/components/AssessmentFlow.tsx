@@ -1,8 +1,7 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   Sparkles,
   ArrowRight,
-  ArrowLeft,
   AlertCircle,
   RefreshCw,
   BookOpen,
@@ -26,30 +25,43 @@ import { CameraCoachWidget } from "./CameraCoachWidget";
 import { captureFrame } from "../lib/camera";
 import { saveSessionToStorage } from "../lib/storage";
 
+export interface InitialDocConfig {
+  file?: File | null;
+  fileBase64?: string | null;
+  textContent?: string | null;
+  sampleName?: string | null;
+  courseName?: string;
+  difficulty?: DifficultyLevel;
+  numQuestions?: number;
+  autoStart?: boolean;
+}
+
 interface AssessmentFlowProps {
   mode: AssessmentMode;
   onBackToHome: () => void;
   onSessionComplete?: (session: SessionReport) => void;
+  initialDocument?: InitialDocConfig | null;
 }
 
 export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
   mode,
   onBackToHome,
   onSessionComplete,
+  initialDocument,
 }) => {
   // Configuration State
-  const [courseName, setCourseName] = useState("");
+  const [courseName, setCourseName] = useState(initialDocument?.courseName || "");
   const [degreeProgram, setDegreeProgram] = useState("B.Tech / College Degree");
   const [targetRole, setTargetRole] = useState("Software Engineer / Tech Role");
-  const [difficulty, setDifficulty] = useState<DifficultyLevel>("Intermediate");
+  const [difficulty, setDifficulty] = useState<DifficultyLevel>(initialDocument?.difficulty || "Intermediate");
   const [subMode, setSubMode] = useState<InterviewSubMode>("technical");
-  const [numQuestions, setNumQuestions] = useState<number>(5);
+  const [numQuestions, setNumQuestions] = useState<number>(initialDocument?.numQuestions || 5);
 
   // File State
-  const [file, setFile] = useState<File | null>(null);
-  const [fileBase64, setFileBase64] = useState<string | null>(null);
-  const [textContent, setTextContent] = useState<string | null>(null);
-  const [sampleName, setSampleName] = useState<string | null>(null);
+  const [file, setFile] = useState<File | null>(initialDocument?.file || null);
+  const [fileBase64, setFileBase64] = useState<string | null>(initialDocument?.fileBase64 || null);
+  const [textContent, setTextContent] = useState<string | null>(initialDocument?.textContent || null);
+  const [sampleName, setSampleName] = useState<string | null>(initialDocument?.sampleName || null);
   const [validationError, setValidationError] = useState<string | null>(null);
 
   // Camera Coach State
@@ -93,6 +105,33 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
     }
   };
 
+  // Auto-launch if initialDocument specifies autoStart
+  const initialTriggerRef = useRef(false);
+  useEffect(() => {
+    if (initialDocument && !initialTriggerRef.current) {
+      initialTriggerRef.current = true;
+      if (initialDocument.file) setFile(initialDocument.file);
+      if (initialDocument.fileBase64) setFileBase64(initialDocument.fileBase64);
+      if (initialDocument.textContent) setTextContent(initialDocument.textContent);
+      if (initialDocument.sampleName) setSampleName(initialDocument.sampleName);
+      if (initialDocument.courseName) setCourseName(initialDocument.courseName);
+      if (initialDocument.difficulty) setDifficulty(initialDocument.difficulty);
+      if (initialDocument.numQuestions) setNumQuestions(initialDocument.numQuestions);
+
+      if (initialDocument.autoStart) {
+        handleGenerateQuestions({
+          fileBase64: initialDocument.fileBase64,
+          textContent: initialDocument.textContent,
+          courseName: initialDocument.courseName,
+          level: initialDocument.difficulty,
+          numQuestions: initialDocument.numQuestions,
+          fileName: initialDocument.file?.name || initialDocument.sampleName || undefined,
+          mimeType: initialDocument.file?.type || (initialDocument.fileBase64 ? "application/pdf" : undefined),
+        });
+      }
+    }
+  }, [initialDocument]);
+
   // Request diverse, non-repeating Posture, Eye Contact & Presence Coach Tip
   const fetchCoachTip = async (requestedCategory?: string) => {
     setIsEvaluatingTip(true);
@@ -135,20 +174,35 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
   };
 
   // Generate Questions via Gemini API
-  const handleGenerateQuestions = async () => {
+  const handleGenerateQuestions = async (overrideParams?: {
+    fileBase64?: string | null;
+    textContent?: string | null;
+    courseName?: string;
+    level?: DifficultyLevel;
+    numQuestions?: number;
+    fileName?: string;
+    mimeType?: string;
+  }) => {
+    const activeBase64 = overrideParams?.fileBase64 !== undefined ? overrideParams.fileBase64 : fileBase64;
+    const activeText = overrideParams?.textContent !== undefined ? overrideParams.textContent : textContent;
+    const activeCourse = overrideParams?.courseName !== undefined ? overrideParams.courseName : courseName;
+    const activeLevel = overrideParams?.level || difficulty;
+    const activeNumQuestions = overrideParams?.numQuestions || numQuestions;
+    const activeFileName = overrideParams?.fileName || file?.name || sampleName || undefined;
+    const activeMimeType = overrideParams?.mimeType || file?.type || (activeBase64 ? "application/pdf" : undefined);
+
     // Validate inputs
-    if (!fileBase64 && !textContent && !courseName.trim() && (!targetRole || !targetRole.trim())) {
+    if (!activeBase64 && !activeText) {
       setValidationError(
         isViva
-          ? "Please upload a syllabus document (PDF/Word/Text) or use the sample syllabus."
-          : "Please upload a resume document (PDF/Word/Text) or use the sample resume."
+          ? "Please upload a syllabus PDF or use the sample syllabus."
+          : "Please upload a resume PDF or use the sample resume."
       );
-      setStatus("idle");
       return;
     }
 
     // If viva mode, require either course name OR an uploaded syllabus (AI will detect course name if omitted)
-    const effectiveCourseName = courseName.trim() || (isViva ? "Course Syllabus" : "");
+    const effectiveCourseName = (activeCourse || "").trim() || (isViva ? "Course Syllabus" : "");
 
     setValidationError(null);
     setStatus("loading");
@@ -158,12 +212,12 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
       mode,
       subMode: isViva ? undefined : subMode,
       courseName: effectiveCourseName || undefined,
-      level: isViva ? difficulty : undefined,
-      numQuestions,
-      fileBase64,
-      fileName: file?.name || sampleName || undefined,
-      textContent,
-      mimeType: file?.type || (fileBase64 ? "application/pdf" : undefined),
+      level: isViva ? activeLevel : undefined,
+      numQuestions: activeNumQuestions,
+      fileBase64: activeBase64,
+      fileName: activeFileName,
+      textContent: activeText,
+      mimeType: activeMimeType,
     };
 
     try {
@@ -470,31 +524,14 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
             <h3 className="text-base font-bold text-red-950 dark:text-red-300">Generation Issue</h3>
             <p className="text-xs text-red-700 dark:text-red-300 leading-relaxed">{errorMsg}</p>
           </div>
-          <div className="flex items-center justify-center gap-3 pt-2">
-            <button
-              type="button"
-              onClick={() => {
-                setStatus("idle");
-                setErrorMsg("");
-                setValidationError(null);
-              }}
-              className="inline-flex items-center gap-2 px-4 py-2.5 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold rounded-xl transition-all border border-slate-200 dark:border-slate-700 shadow-2xs"
-            >
-              <ArrowLeft className="w-3.5 h-3.5" />
-              <span>Back to Setup</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setErrorMsg("");
-                handleGenerateQuestions();
-              }}
-              className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#0B1A33] hover:bg-[#16233C] dark:bg-blue-600 dark:hover:bg-blue-700 text-white text-xs font-semibold rounded-xl transition-all shadow-xs"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>Try Again</span>
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => handleGenerateQuestions()}
+            className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#0B1A33] hover:bg-[#16233C] dark:bg-blue-600 dark:hover:bg-blue-700 text-white text-xs font-semibold rounded-xl transition-all shadow-xs"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Try Again</span>
+          </button>
         </div>
       </div>
     );
@@ -864,7 +901,7 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
         <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-end">
           <button
             type="button"
-            onClick={handleGenerateQuestions}
+            onClick={() => handleGenerateQuestions()}
             className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-8 py-3.5 bg-[#0B1A33] hover:bg-[#16233C] dark:bg-blue-600 dark:hover:bg-blue-700 text-white font-bold text-sm rounded-xl shadow-xs hover:shadow-md transition-all group"
           >
             <Sparkles className="w-4 h-4 text-blue-400 group-hover:rotate-12 transition-transform" />

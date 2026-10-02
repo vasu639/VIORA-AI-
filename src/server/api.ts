@@ -1,12 +1,6 @@
 import express from "express";
 import { GoogleGenAI } from "@google/genai";
 import mammoth from "mammoth";
-// @ts-ignore
-import * as pdfParseModule from "pdf-parse";
-const PDFParse =
-  (pdfParseModule as any).PDFParse ||
-  (pdfParseModule as any).default?.PDFParse ||
-  (pdfParseModule as any).default;
 
 const PORT = 3000;
 
@@ -30,49 +24,63 @@ function getAiClient(): GoogleGenAI {
   return aiClient;
 }
 
+async function extractTextFromPdfBuffer(buffer: Buffer): Promise<string> {
+  try {
+    const { PDFParse } = await import("pdf-parse");
+    const parser = new PDFParse({ data: buffer });
+    const result = await parser.getText();
+    if (typeof parser.destroy === "function") {
+      await parser.destroy();
+    }
+    return result?.text ? result.text.trim() : "";
+  } catch (err) {
+    console.warn("[PDF Parser] Failed to parse PDF text with pdf-parse:", err);
+    return "";
+  }
+}
+
 async function generateContentWithRetry(params: {
   contents: any;
   config?: any;
   preferredModel?: string;
 }) {
   const ai = getAiClient();
-  // Valid, highly performant and accessible Gemini models:
-  // 1. gemini-3.1-flash-lite: Ultra-reliable, blazing fast (~1.2s), 1M token context
-  // 2. gemini-flash-latest: Full flash model alias
-  // 3. gemini-3.8-flash: Multimodal workhorse
+  // Valid, highly capable Gemini models that do NOT require paid tier:
+  // 1. gemini-3.8-flash (Primary workhorse with native 1M context, multimodal PDF/image parsing)
+  // 2. gemini-flash-latest (Reliable stable alias)
+  // 3. gemini-3.1-flash-lite (Fast lightweight fallback with generous quota)
   const models = [
-    params.preferredModel || "gemini-3.1-flash-lite",
+    params.preferredModel || "gemini-3.8-flash",
     "gemini-flash-latest",
-    "gemini-3.8-flash",
+    "gemini-3.1-flash-lite",
   ];
 
   let lastError: any = null;
   for (const model of models) {
-    try {
-      console.log(`[Gemini] Calling model ${model}...`);
-      const callPromise = ai.models.generateContent({
-        model,
-        contents: params.contents,
-        config: params.config,
-      });
-
-      let timer: any;
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error(`Model ${model} timed out after 12s`)),
-          12000
-        );
-      });
-
-      const response = await Promise.race([callPromise, timeoutPromise]).finally(() => {
-        clearTimeout(timer);
-      });
-
-      console.log(`[Gemini] Model ${model} succeeded!`);
-      return response;
-    } catch (err: any) {
-      lastError = err;
-      console.warn(`[Gemini] Model ${model} failed:`, err?.message || err);
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        console.log(`[Gemini] Calling model ${model} (attempt ${attempt})...`);
+        const response = await ai.models.generateContent({
+          model,
+          contents: params.contents,
+          config: params.config,
+        });
+        console.log(`[Gemini] Model ${model} succeeded!`);
+        return response;
+      } catch (err: any) {
+        lastError = err;
+        console.warn(`[Gemini] Attempt ${attempt} with ${model} failed:`, err?.message || err);
+        // If quota exhausted or rate limit hit on this model, instantly switch to next model
+        if (
+          err?.message?.includes("429") ||
+          err?.message?.includes("RESOURCE_EXHAUSTED") ||
+          err?.message?.includes("quota")
+        ) {
+          console.warn(`[Gemini] Model ${model} quota exhausted, cascading to next model...`);
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 1000));
+      }
     }
   }
   throw lastError;
@@ -101,37 +109,16 @@ export function createApiApp() {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
   });
 
-  // Generate Questions
-  app.post(["/api/generate-questions", "/generate-questions"], async (req, res) => {
-    let extractedText = "";
-    let cleanBase64 = "";
-    let detectedMime = "";
-    const body = req.body || {};
-    const {
-      mode = "viva",
-      subMode,
-      courseName,
-      level,
-      numQuestions = 6,
-      fileBase64,
-      fileName,
-      mimeType,
-      textContent,
-    } = body;
-
-    const questionCount = Math.min(Math.max(Number(numQuestions) || 6, 3), 10);
-
+  // Extract Text from Document (PDF, DOCX, TXT)
+  app.post(["/api/extract-text", "/extract-text"], async (req, res) => {
     try {
-      if (!fileBase64 && !textContent && !courseName) {
-        return res.status(400).json({ error: "Please upload a syllabus or resume document, or enter a subject name." });
-      }
+      const { fileBase64, fileName, mimeType, textContent } = req.body;
+      let extractedText = textContent ? String(textContent).trim() : "";
+      const lowerFileName = (fileName || "").toLowerCase();
 
-      extractedText = textContent ? String(textContent).trim() : "";
-      detectedMime = mimeType || "";
-
-      // Process fileBase64 if provided
       if (fileBase64 && typeof fileBase64 === "string") {
         let rawBase64 = fileBase64;
+        let detectedMime = mimeType || "";
         if (rawBase64.includes(",")) {
           const parts = rawBase64.split(",");
           rawBase64 = parts[1];
@@ -140,173 +127,319 @@ export function createApiApp() {
             detectedMime = match[1];
           }
         }
-        cleanBase64 = rawBase64.replace(/\s+/g, "");
+        const cleanBase64 = rawBase64.replace(/\s+/g, "");
 
-        const lowerFileName = (fileName || "").toLowerCase();
         const isDocx =
           lowerFileName.endsWith(".docx") ||
           detectedMime.includes("wordprocessingml") ||
           detectedMime.includes("docx");
 
-        // Extract text from Microsoft Word documents using mammoth
         if (isDocx && cleanBase64) {
           try {
             const docxBuffer = Buffer.from(cleanBase64, "base64");
             const result = await mammoth.extractRawText({ buffer: docxBuffer });
             if (result.value && result.value.trim()) {
-              extractedText = (extractedText ? extractedText + "\n\n" : "") + result.value.trim();
-              console.log(`[Docx Parser] Successfully extracted ${result.value.length} characters from Word syllabus/resume.`);
-              cleanBase64 = ""; // Word document now converted to text
+              extractedText = result.value.trim();
             }
-          } catch (docxErr) {
-            console.warn("[Docx Parser] Mammoth extraction failed, continuing with file data:", docxErr);
+          } catch (mErr) {
+            console.warn("[Extract-Text] DOCX extraction error:", mErr);
           }
         }
 
-        // Extract text from PDF documents using PDFParse
         const isPdf =
           lowerFileName.endsWith(".pdf") ||
-          detectedMime === "application/pdf" ||
-          (cleanBase64 && cleanBase64.length > 50);
+          detectedMime.includes("pdf") ||
+          cleanBase64.startsWith("JVBERi0");
 
         if (isPdf && cleanBase64) {
           try {
             const pdfBuffer = Buffer.from(cleanBase64, "base64");
-            const headerSnippet = pdfBuffer.slice(0, 10).toString("binary");
-            if (
-              headerSnippet.includes("%PDF") ||
-              lowerFileName.endsWith(".pdf") ||
-              detectedMime === "application/pdf"
-            ) {
-              const parser = new PDFParse({ data: pdfBuffer });
-              const pdfResult = await parser.getText();
-              if (pdfResult && pdfResult.text && pdfResult.text.trim()) {
-                const cleanedPdfText = pdfResult.text.replace(/\r\n/g, "\n").trim();
-                extractedText = (extractedText ? extractedText + "\n\n" : "") + cleanedPdfText;
-                console.log(
-                  `[PDF Parser] Successfully extracted ${cleanedPdfText.length} characters of text from PDF syllabus/resume.`
-                );
-                // Clear cleanBase64 if text extraction yielded substantial text to avoid multi-megabyte payloads to Gemini
-                if (cleanedPdfText.length > 50) {
-                  cleanBase64 = "";
-                }
-              }
+            const pdfText = await extractTextFromPdfBuffer(pdfBuffer);
+            if (pdfText && pdfText.trim()) {
+              extractedText = pdfText.trim();
             }
-          } catch (pdfErr) {
-            console.warn("[PDF Parser] PDFParse extraction note, will keep base64 for Gemini multimodal:", pdfErr);
+          } catch (pErr) {
+            console.warn("[Extract-Text] PDF extraction error:", pErr);
           }
         }
 
-        // Extract plain text / markdown files directly
         const isPlainText =
           lowerFileName.endsWith(".txt") ||
           lowerFileName.endsWith(".md") ||
           detectedMime.startsWith("text/");
 
-        if (isPlainText && cleanBase64) {
+        if (isPlainText && cleanBase64 && !extractedText) {
           try {
             const decoded = Buffer.from(cleanBase64, "base64").toString("utf-8");
             if (decoded && decoded.trim()) {
-              extractedText = (extractedText ? extractedText + "\n\n" : "") + decoded.trim();
-              cleanBase64 = "";
+              extractedText = decoded.trim();
             }
-          } catch (txtErr) {
-            console.warn("[Text Parser] Plain text decoding error:", txtErr);
-          }
-        }
-
-        // Ensure valid MIME type for Gemini inlineData
-        if (cleanBase64) {
-          if (!detectedMime || detectedMime === "application/octet-stream") {
-            if (lowerFileName.endsWith(".pdf")) {
-              detectedMime = "application/pdf";
-            } else if (lowerFileName.endsWith(".png")) {
-              detectedMime = "image/png";
-            } else if (lowerFileName.endsWith(".jpg") || lowerFileName.endsWith(".jpeg")) {
-              detectedMime = "image/jpeg";
-            } else if (lowerFileName.endsWith(".webp")) {
-              detectedMime = "image/webp";
-            } else {
-              detectedMime = "application/pdf";
-            }
+          } catch (tErr) {
+            console.warn("[Extract-Text] Plain text extraction error:", tErr);
           }
         }
       }
 
+      if (!extractedText || extractedText.trim().length === 0) {
+        return res.status(400).json({
+          error: "Could not extract readable text from the uploaded file. Please ensure it contains selectable text.",
+        });
+      }
+
+      // Analyze headings, units, and subject
+      const lines = extractedText.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+      const headingKeywords = ["unit", "module", "chapter", "section", "topic", "part"];
+      const detectedUnits: string[] = [];
+      for (const line of lines) {
+        const lower = line.toLowerCase();
+        if (
+          headingKeywords.some((kw) => lower.startsWith(kw) || lower.includes(kw + " ")) &&
+          line.length < 90 &&
+          detectedUnits.length < 8
+        ) {
+          if (!detectedUnits.includes(line)) {
+            detectedUnits.push(line);
+          }
+        }
+      }
+
+      const wordCount = extractedText.split(/\s+/).filter(Boolean).length;
+      const charCount = extractedText.length;
+      const preview = extractedText.slice(0, 500) + (extractedText.length > 500 ? "..." : "");
+
+      // Attempt to identify subject title from first few lines
+      let detectedSubject = "";
+      for (let i = 0; i < Math.min(lines.length, 5); i++) {
+        const line = lines[i];
+        if (
+          line.length > 4 &&
+          line.length < 80 &&
+          !line.toLowerCase().includes("page") &&
+          !line.toLowerCase().includes("http")
+        ) {
+          detectedSubject = line;
+          break;
+        }
+      }
+
+      return res.json({
+        success: true,
+        text: extractedText,
+        wordCount,
+        charCount,
+        preview,
+        detectedSubject: detectedSubject || "Course Syllabus",
+        detectedUnits,
+      });
+    } catch (err: any) {
+      console.error("[Extract Text API Error]:", err);
+      return res.status(500).json({ error: err.message || "Failed to extract text." });
+    }
+  });
+
+  // Generate Questions
+  app.post(["/api/generate-questions", "/generate-questions"], async (req, res) => {
+    const {
+      mode,
+      subMode,
+      courseName,
+      level,
+      numQuestions = 6,
+      fileBase64,
+      fileName,
+      mimeType,
+      textContent,
+    } = req.body;
+
+    if (!fileBase64 && !textContent) {
+      return res.status(400).json({ error: "No document or file was attached." });
+    }
+
+    const questionCount = Math.min(Math.max(Number(numQuestions) || 6, 3), 10);
+    let extractedText = textContent ? String(textContent).trim() : "";
+    let cleanBase64 = "";
+    let detectedMime = mimeType || "";
+
+    // Process fileBase64 if provided
+    if (fileBase64 && typeof fileBase64 === "string") {
+      let rawBase64 = fileBase64;
+      if (rawBase64.includes(",")) {
+        const parts = rawBase64.split(",");
+        rawBase64 = parts[1];
+        const match = parts[0].match(/:(.*?);/);
+        if (match && match[1]) {
+          detectedMime = match[1];
+        }
+      }
+      cleanBase64 = rawBase64.replace(/\s+/g, "");
+
+      const lowerFileName = (fileName || "").toLowerCase();
+      const isDocx =
+        lowerFileName.endsWith(".docx") ||
+        detectedMime.includes("wordprocessingml") ||
+        detectedMime.includes("docx");
+
+      // Extract text from Microsoft Word documents using mammoth
+      if (isDocx && cleanBase64) {
+        try {
+          const docxBuffer = Buffer.from(cleanBase64, "base64");
+          const result = await mammoth.extractRawText({ buffer: docxBuffer });
+          if (result.value && result.value.trim()) {
+            extractedText = (extractedText ? extractedText + "\n\n" : "") + result.value.trim();
+            console.log(`[Docx Parser] Successfully extracted ${result.value.length} characters from Word syllabus/resume.`);
+            cleanBase64 = ""; // Word document now converted to text
+          }
+        } catch (docxErr) {
+          console.warn("[Docx Parser] Mammoth extraction failed, continuing with file data:", docxErr);
+        }
+      }
+
+      // Extract text from PDF documents using pdf-parse
+      const isPdf =
+        lowerFileName.endsWith(".pdf") ||
+        detectedMime.includes("pdf") ||
+        cleanBase64.startsWith("JVBERi0");
+
+      if (isPdf && cleanBase64) {
+        try {
+          const pdfBuffer = Buffer.from(cleanBase64, "base64");
+          const pdfText = await extractTextFromPdfBuffer(pdfBuffer);
+          if (pdfText && pdfText.trim()) {
+            extractedText = (extractedText ? extractedText + "\n\n" : "") + pdfText.trim();
+            console.log(`[PDF Parser] Successfully extracted ${pdfText.length} characters of raw text from PDF syllabus/resume.`);
+          }
+        } catch (pdfErr) {
+          console.warn("[PDF Parser] PDF extraction warning:", pdfErr);
+        }
+      }
+
+      // Extract plain text / markdown files directly
+      const isPlainText =
+        lowerFileName.endsWith(".txt") ||
+        lowerFileName.endsWith(".md") ||
+        detectedMime.startsWith("text/");
+
+      if (isPlainText && cleanBase64) {
+        try {
+          const decoded = Buffer.from(cleanBase64, "base64").toString("utf-8");
+          if (decoded && decoded.trim()) {
+            extractedText = (extractedText ? extractedText + "\n\n" : "") + decoded.trim();
+            cleanBase64 = "";
+          }
+        } catch (txtErr) {
+          console.warn("[Text Parser] Plain text decoding error:", txtErr);
+        }
+      }
+
+      // Ensure valid MIME type for Gemini inlineData
+      if (cleanBase64) {
+        if (!detectedMime || detectedMime === "application/octet-stream") {
+          if (lowerFileName.endsWith(".pdf") || cleanBase64.startsWith("JVBERi0")) {
+            detectedMime = "application/pdf";
+          } else if (lowerFileName.endsWith(".png")) {
+            detectedMime = "image/png";
+          } else if (lowerFileName.endsWith(".jpg") || lowerFileName.endsWith(".jpeg")) {
+            detectedMime = "image/jpeg";
+          } else if (lowerFileName.endsWith(".webp")) {
+            detectedMime = "image/webp";
+          } else {
+            detectedMime = "application/pdf";
+          }
+        }
+      }
+    }
+
+    try {
       let prompt = "";
+      const hasSpecificCourse = courseName && courseName.trim() && courseName !== "Course Syllabus" && courseName !== "Attached Syllabus";
+
       if (mode === "viva") {
-        prompt = `You are an experienced, highly qualified university examiner conducting an official oral viva-voce examination.
-The candidate has provided their official syllabus/curriculum for: "${courseName || "Attached Syllabus"}".
+        prompt = `You are a strict, formal university oral viva-voce examiner.
+YOUR EXCLUSIVE AND MANDATORY SOURCE OF TRUTH IS THE CANDIDATE'S ATTACHED SYLLABUS / CURRICULUM DOCUMENT.
+${hasSpecificCourse ? `Target Course Name: "${courseName}"` : `Extract the exact course/subject title directly from the document.`}
 Exam Difficulty: ${level || "Intermediate"}.
 
-CRITICAL MANDATORY INSTRUCTIONS (STRICT SYLLABUS GROUNDING):
-1. THOROUGHLY READ THE ATTACHED SYLLABUS DOCUMENT:
-   - Identify the specific subject name, units, modules, chapters, theories, equations, experiments, laws, or case studies detailed in the document.
-   - EVERY SINGLE QUESTION MUST BE 100% GROUNDED in the specific academic subject of this syllabus.
-   - STRICTLY FORBIDDEN: DO NOT ask generic questions or vague structural questions like "Could you walk me through the foundational theoretical framework", "When applying key analytical methodologies", or generic CS/programming questions for non-CS subjects.
-   - Instead, mention the SPECIFIC concept, chapter, law, formula, mechanism, or unit from the document (e.g., if thermodynamics: Carnot cycle, entropy, Rankine cycle; if law: constitutional remedies, tort negligence; if medicine: cranial nerves, glycolysis pathway; if civil engineering: Bernoulli theorem, Pelton turbine).
-   - Distribute the ${questionCount} questions across the different units/chapters found in the syllabus so the entire course is represented.
+CRITICAL MANDATORY RULES — 100% STRICT DOCUMENT GROUNDING (ABSOLUTE REQUIREMENT):
+1. ZERO HALLUCINATION & ZERO OUTSIDE TOPICS:
+   - You MUST generate questions derived EXCLUSIVELY and DIRECTLY from the text, modules, chapters, formulas, theorems, mechanisms, and topics that appear inside the provided document.
+   - You are STRICTLY FORBIDDEN from asking questions about any outside subject or topic NOT mentioned in the candidate's syllabus. For example, if the syllabus is on Physics, Law, Mechanical Engineering, Chemistry, Medicine, Accounting, or Philosophy, every question MUST strictly test that specific discipline. NEVER assume computer science or operating systems unless the document explicitly teaches computer science.
+   - If the uploaded document only covers 2 or 3 units, distribute all ${questionCount} questions strictly across those units. Do NOT invent new modules or extrapolate beyond the document.
 
-2. DIFFICULTY LEVEL (${level || "Intermediate"}):
-   - Beginner: Definitions, foundational concepts, core mechanisms, standard terminology.
-   - Intermediate: Working mechanisms, process workflows, comparative analysis, practical application.
-   - Advanced: In-depth design decisions, edge cases, trade-offs, theoretical limitations, and critical evaluation.
+2. MANDATORY VERBATIM CITATION:
+   - For every question, the "basedOn" field MUST quote the EXACT Unit, Module, Chapter, or Topic heading from the uploaded syllabus.
+   - The "topic" field MUST be the exact subject module or section title from the document.
+   - The question must reference the specific concept, law, mechanism, or workflow as defined in the document.
 
-3. CONVERSATIONAL ORAL VIVA FORMAT:
-   - Frame questions the way a live professor speaks aloud across a table (e.g., "In Unit 2 on [Topic], how does [Specific Mechanism] work?", "Looking at your syllabus topic [Topic], what is the fundamental difference between [A] and [B]?").
-   - Keep questions focused and concise (1–3 sentences each).
+3. DIFFICULTY LEVEL (${level || "Intermediate"}):
+   - Beginner: Inquire about definitions, fundamental laws, and primary principles explicitly covered in the syllabus text.
+   - Intermediate: Inquire about mechanisms, comparative differences, working procedures, and derivations explicitly covered in the syllabus text.
+   - Advanced: Inquire about boundary conditions, design trade-offs, limitations, and rigorous derivations explicitly covered in the syllabus text.
+
+4. ACCURATE SUBJECT DETECTION:
+   - "detectedSubject": Extract the exact Course or Subject title as written inside the syllabus document.
+   - "detectedUnits": List the actual unit/module titles extracted directly from the syllabus document.
 
 Return ONLY valid JSON matching this exact structure:
 {
-  "detectedSubject": "<Exact subject or course title detected from the syllabus>",
-  "detectedUnits": ["<Unit 1 title>", "<Unit 2 title>", ...],
+  "detectedSubject": "<Exact course or subject title extracted from document>",
+  "detectedUnits": ["<Unit 1 title from doc>", "<Unit 2 title from doc>", ...],
   "questions": [
     {
       "id": 1,
-      "topic": "<Exact unit or topic from the uploaded syllabus>",
-      "basedOn": "<Syllabus unit or chapter name>",
-      "question": "<Conversational viva question directly testing this specific topic by name>"
+      "topic": "<Exact topic or unit title from the uploaded syllabus>",
+      "basedOn": "<Exact section, module, or heading from the uploaded syllabus>",
+      "question": "<Rigorous conversational viva question directly testing this concept from the document>"
     }
   ]
 }`;
       } else {
         const selectedSubMode = subMode || "technical";
-        prompt = `You are an expert senior interviewer conducting a ${selectedSubMode} interview.
-The candidate has provided their resume/CV or background profile.
+        prompt = `You are an expert technical interviewer conducting a ${selectedSubMode} interview.
+YOUR EXCLUSIVE AND MANDATORY SOURCE OF CONTEXT IS THE CANDIDATE'S ATTACHED RESUME / CV DOCUMENT.
 
-CRITICAL MANDATORY INSTRUCTIONS (STRICT RESUME GROUNDING):
-1. THOROUGHLY READ THE ATTACHED RESUME / CV DOCUMENT:
-   - Identify the candidate's actual projects, work experience, company names, tools, languages, databases, cloud platforms, and listed achievements.
-   - EVERY SINGLE QUESTION MUST BE DIRECTLY AND UNMISTAKABLY GROUNDED in what is actually written on their resume.
-   - STRICTLY FORBIDDEN: DO NOT ask generic questions (such as "tell me about a challenge" or "how do you monitor production health" without citing their actual project).
-   - In each question or its "basedOn" field, cite their SPECIFIC project title, company, or technology (e.g., "In your project [Project Name], how did you implement...", "At [Company Name], you mentioned using [Technology], what were the trade-offs...?").
+CRITICAL MANDATORY RULES — 100% STRICT RESUME GROUNDING (ABSOLUTE REQUIREMENT):
+1. ZERO GENERIC INTERVIEW QUESTIONS:
+   - You are STRICTLY FORBIDDEN from asking generic textbook questions (e.g. "What is OOP?", "Where do you see yourself in 5 years?", "Explain a binary search tree").
+   - Every single question MUST specifically name and probe an ACTUAL project, company, tech stack, tool, metric, or role explicitly written on the candidate's resume.
+   - Always cite the specific project or achievement in your question: "On your resume under [Project Name], you used [Tech/Tool] to [Objective]. Can you walk me through..."
 
-2. STYLE GUIDE FOR ${selectedSubMode.toUpperCase()}:
-   - Technical: Deep dive into the architecture, libraries, or engineering decisions in their listed projects.
-   - Behavioral: STAR-format question anchored to a specific team or achievement on their resume.
-   - Managerial: Leadership, system scale, or coordination in their past roles.
-   - Rapid Fire: Concise questions verifying technical competence across skills listed on their CV.
+2. MANDATORY CITATION:
+   - The "basedOn" field MUST quote or cite the exact project name, company name, or listed achievement from the candidate's uploaded resume.
+   - The "topic" field MUST specify the exact technology, system component, or skill listed on their resume.
 
-3. QUESTION COUNT:
-   - Generate exactly ${questionCount} questions.
+3. INTERVIEW SUB-MODE (${selectedSubMode.toUpperCase()}):
+   - Technical: Probe architectural trade-offs, engineering challenges, database choices, or scalability from their listed projects.
+   - Behavioral: Ask STAR-format questions linked to their listed past teams, roles, or project deadlines.
+   - Managerial: Probe leadership, technical debt, and system delivery based on their listed experience.
+   - Rapid Fire: Short, direct 30-second technical questions probing their specific listed skills and tools.
+
+4. CANDIDATE PROFILE DETECTION:
+   - "detectedCandidateName": The candidate's name as written at the top of their resume.
+   - "detectedKeySkills": Array of actual technical skills and tools extracted from their resume.
 
 Return ONLY valid JSON matching this exact structure:
 {
-  "detectedCandidateName": "<Candidate name detected from resume>",
-  "detectedKeySkills": ["<Skill 1>", "<Skill 2>", "<Project 1>", ...],
+  "detectedCandidateName": "<Candidate name from resume>",
+  "detectedKeySkills": ["<Skill 1 from resume>", "<Skill 2 from resume>", ...],
   "questions": [
     {
       "id": 1,
-      "topic": "<Role, Project, or Skill Area from Resume>",
-      "basedOn": "<Exact project, company, or skill listed on their resume>",
-      "question": "<Targeted interview question referencing their actual project or role>"
+      "topic": "<Specific technology or skill from their resume>",
+      "basedOn": "<Exact project, company, or listed achievement from their resume>",
+      "question": "<Targeted interview question referencing their exact project and tech stack>"
     }
   ]
 }`;
       }
 
-      // Build multimodal contents array: binary file data first, text content second, prompt last
+      // Build multimodal contents array: verbatim document text first, binary file data second, prompt last
       const contents: Array<any> = [];
+
+      if (extractedText && extractedText.trim().length > 0) {
+        contents.push({
+          text: `==================== VERBATIM UPLOADED DOCUMENT CONTENT ====================\n${extractedText.slice(0, 100000)}\n============================================================================`,
+        });
+      }
 
       if (cleanBase64) {
         contents.push({
@@ -314,12 +447,6 @@ Return ONLY valid JSON matching this exact structure:
             mimeType: detectedMime,
             data: cleanBase64,
           },
-        });
-      }
-
-      if (extractedText) {
-        contents.push({
-          text: `USER UPLOADED DOCUMENT CONTENT (${mode === "viva" ? "SYLLABUS / CURRICULUM" : "RESUME / CV"}):\n\n${extractedText.slice(0, 60000)}`,
         });
       }
 
@@ -376,35 +503,48 @@ Return ONLY valid JSON matching this exact structure:
     } catch (err: any) {
       console.error("Error generating questions with Gemini:", err);
 
-      // If multimodal or large payload failed, attempt text-prompt generation using extracted text
-      if (extractedText || courseName) {
+      // If multimodal failed (e.g. large PDF or parsing issue), try text-guided emergency generation with extracted text
+      if (extractedText && extractedText.trim().length > 30) {
         try {
-          console.log("[Gemini Fallback] Attempting text-prompt generation with extracted document text...");
+          console.log("[Gemini Fallback] Attempting text-only generation with verbatim extracted document text...");
           const textOnlyPrompt =
             mode === "viva"
-              ? `You are an oral viva examiner. The student is taking an examination in: "${courseName || "Attached Syllabus"}". Difficulty: ${level || "Intermediate"}.
-SYLLABUS CONTENT:
-${extractedText.slice(0, 20000)}
+              ? `You are a university oral viva examiner. You MUST generate ${questionCount} questions STRICTLY and EXCLUSIVELY based on the following uploaded syllabus text. Do NOT ask anything outside this text:
+=== SYLLABUS TEXT ===
+${extractedText.slice(0, 40000)}
+=== END SYLLABUS ===
 
-Generate ${questionCount} oral viva questions specifically on the units, laws, mechanisms, and topics in this syllabus.
-Do NOT ask generic structural questions. Every question MUST explicitly mention specific topics from the syllabus above.
+Generate ${questionCount} oral viva questions directly testing the units and concepts in the text above. Difficulty: ${level || "Intermediate"}.
 Return JSON:
 {
-  "detectedSubject": "${courseName || "Course Syllabus"}",
+  "detectedSubject": "<Subject name from syllabus>",
+  "detectedUnits": ["<Unit 1>", "<Unit 2>"],
   "questions": [
-    { "id": 1, "topic": "<Syllabus Topic>", "basedOn": "<Unit>", "question": "<Viva question testing this syllabus topic>" }
+    {
+      "id": 1,
+      "topic": "<Exact topic from syllabus text>",
+      "basedOn": "<Unit or heading from syllabus text>",
+      "question": "<Question strictly on this concept from the syllabus>"
+    }
   ]
 }`
-              : `You are an interviewer conducting a ${subMode || "technical"} interview.
-CANDIDATE RESUME:
-${extractedText.slice(0, 20000)}
+              : `You are an interviewer conducting a ${subMode || "technical"} interview. You MUST generate ${questionCount} questions STRICTLY and EXCLUSIVELY based on the candidate's resume text below. Do NOT ask generic questions:
+=== RESUME TEXT ===
+${extractedText.slice(0, 40000)}
+=== END RESUME ===
 
-Generate ${questionCount} interview questions specifically tailored to their listed projects, tools, and experience.
-Do NOT ask generic questions without naming their actual project or skill.
+Generate ${questionCount} interview questions referencing specific projects and tools in their resume.
 Return JSON:
 {
+  "detectedCandidateName": "<Name from resume>",
+  "detectedKeySkills": ["<Skill 1>", "<Skill 2>"],
   "questions": [
-    { "id": 1, "topic": "<Project/Skill>", "basedOn": "<Project Name>", "question": "<Interview question referencing their project>" }
+    {
+      "id": 1,
+      "topic": "<Technology or project from resume>",
+      "basedOn": "<Project or experience from resume>",
+      "question": "<Targeted question referencing their project>"
+    }
   ]
 }`;
 
@@ -418,166 +558,79 @@ Return JSON:
             const normalized = parsed.questions.map((q: any, idx: number) => ({
               id: q.id || idx + 1,
               question: q.question || q.text || "Question",
-              topic: q.topic || courseName || "Syllabus Topic",
-              basedOn: q.basedOn || courseName || "Course Syllabus",
+              topic: q.topic || parsed.detectedSubject || "Syllabus Topic",
+              basedOn: q.basedOn || parsed.detectedSubject || "Course Syllabus",
             }));
             return res.status(200).json({
               questions: normalized,
-              detectedSubject: parsed.detectedSubject || courseName,
+              detectedSubject: parsed.detectedSubject || courseName || undefined,
               detectedUnits: Array.isArray(parsed.detectedUnits) ? parsed.detectedUnits : undefined,
+              detectedCandidateName: parsed.detectedCandidateName || undefined,
+              detectedKeySkills: Array.isArray(parsed.detectedKeySkills) ? parsed.detectedKeySkills : undefined,
             });
           }
         } catch (fbErr) {
-          console.warn("[Gemini Fallback] Text fallback also failed:", fbErr);
+          console.warn("[Gemini Fallback] Text-only fallback also failed:", fbErr);
         }
       }
 
-      // Subject & Document-Aware Resilient Fallback (extracts actual units from text if available)
-      const fallbackQs = getResilientFallbackQuestions(mode, subMode, courseName, level, numQuestions, extractedText);
-      return res.status(200).json({
-        questions: fallbackQs,
-        detectedSubject: courseName || (mode === "viva" ? "Course Syllabus" : "Candidate Resume"),
-        isFallback: true,
+      // If document text was extracted, extract syllabus headings directly from extractedText to create grounded questions
+      if (extractedText && extractedText.trim().length > 30) {
+        const textBasedQs = generateQuestionsFromDocumentText(extractedText, mode, questionCount, level, subMode);
+        if (textBasedQs.length > 0) {
+          return res.status(200).json({
+            questions: textBasedQs,
+            detectedSubject: courseName || (mode === "viva" ? "Uploaded Syllabus" : "Candidate Resume"),
+          });
+        }
+      }
+
+      // If no text could be extracted at all (corrupt or unreadable PDF)
+      return res.status(400).json({
+        error: "Could not extract readable text from the uploaded document. Please ensure your PDF contains selectable text, or upload a Word (.docx) or plain text document."
       });
     }
   });
 
-function extractTopicsFromText(text: string): string[] {
-  if (!text) return [];
-  const lines = text
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l.length > 4 && l.length < 90);
-
-  const matchedTopics: string[] = [];
-  for (const line of lines) {
-    // Match common syllabus/resume heading patterns
-    if (
-      /^(?:unit|module|chapter|topic|section|part|\d+[\.\)]|\*|-|#+)\s+/i.test(line) ||
-      /(?:mechanics|thermodynamics|chemistry|biology|anatomy|law|physics|algorithm|database|network|architecture|system|protocol|react|python|java|aws|docker|microservices|pipeline|compiler|signal)/i.test(line)
-    ) {
-      const cleaned = line
-        .replace(/^(?:unit|module|chapter|topic|section|part|\d+[\.\)]|\*|-|#+)\s*[:.-]?\s*/i, "")
-        .replace(/[:;]$/, "")
-        .trim();
-      if (cleaned.length > 4 && cleaned.length < 70 && !matchedTopics.includes(cleaned)) {
-        matchedTopics.push(cleaned);
-      }
-    }
-  }
-  return matchedTopics;
-}
-
-function getResilientFallbackQuestions(
+function generateQuestionsFromDocumentText(
+  docText: string,
   mode: string,
-  subMode: string = "technical",
-  courseName: string = "",
+  count: number,
   level: string = "Intermediate",
-  numQuestions: number = 5,
-  extractedText: string = ""
-) {
-  const count = Math.min(Math.max(Number(numQuestions) || 5, 3), 10);
-  const subject = courseName.trim() || (mode === "viva" ? "this academic syllabus" : "your technical portfolio");
-  const extractedTopics = extractTopicsFromText(extractedText);
+  subMode: string = "technical"
+): Array<{ id: number; question: string; topic: string; basedOn: string }> {
+  const lines = docText.split("\n").map(l => l.trim()).filter(l => l.length > 3);
+  // Find lines that look like units, modules, chapters, or headings
+  const headingKeywords = ["unit", "module", "chapter", "section", "topic", "part", "lecture", "experiment", "lab"];
+  const headings = lines.filter(l => {
+    const lower = l.toLowerCase();
+    return headingKeywords.some(kw => lower.includes(kw)) || (l.length < 90 && (l.endsWith(":") || /^[0-9]+[\.\)]/.test(l)));
+  });
 
-  if (mode === "viva") {
-    // If topics were extracted from the user's document, build questions grounded in those specific topics
-    if (extractedTopics.length >= 2) {
-      return extractedTopics.slice(0, count).map((topic, idx) => ({
-        id: idx + 1,
+  const topicsToUse = headings.length >= 3 ? headings : lines.filter(l => l.length > 8 && l.length < 100);
+  const selectedTopics = topicsToUse.slice(0, count * 2);
+
+  const questions: Array<{ id: number; question: string; topic: string; basedOn: string }> = [];
+  for (let i = 0; i < count; i++) {
+    const rawTopic = selectedTopics[i % selectedTopics.length] || `Document Topic ${i + 1}`;
+    const topic = rawTopic.replace(/^[-*•\d\.\)\s]+/, "").trim();
+    if (mode === "viva") {
+      questions.push({
+        id: i + 1,
         topic: topic,
-        basedOn: `Syllabus: ${topic}`,
-        question: `Looking at your syllabus topic "${topic}", could you explain its fundamental mechanism, key principles, and practical application?`,
-      }));
-    }
-
-    const list = [
-      {
-        id: 1,
-        topic: `${subject}: Core Principles`,
-        basedOn: `${subject} Syllabus`,
-        question: `In your study of ${subject}, what is the fundamental governing principle or law that forms the basis of this subject, and how is it applied in practice?`,
-      },
-      {
-        id: 2,
-        topic: `${subject}: Key Mechanisms`,
-        basedOn: `${subject} Syllabus`,
-        question: `What is the primary step-by-step mechanism or workflow involved in the key processes of ${subject}? What are its key parameters and operating constraints?`,
-      },
-      {
-        id: 3,
-        topic: `${subject}: Comparative Analysis`,
-        basedOn: `${subject} Syllabus`,
-        question: `When analyzing different methodologies or models in ${subject}, how do you evaluate their trade-offs and select the most suitable approach for a given scenario?`,
-      },
-      {
-        id: 4,
-        topic: `${subject}: Real-World Application`,
-        basedOn: `${subject} Syllabus`,
-        question: `Can you discuss a practical application or experimental implementation of ${subject} and explain how edge cases or anomalies are handled?`,
-      },
-      {
-        id: 5,
-        topic: `${subject}: Advanced Analysis`,
-        basedOn: `${subject} Syllabus`,
-        question: `At the ${level} level of ${subject}, what are the major theoretical limitations or recent advances that challenge traditional solutions?`,
-      },
-      {
-        id: 6,
-        topic: `${subject}: Critical Defense`,
-        basedOn: `${subject} Syllabus`,
-        question: `If an examiner asks you to defend a core derivation or conclusion in ${subject}, what primary evidence or formulas would you use to support your answer?`,
-      },
-    ];
-    return list.slice(0, count);
-  } else {
-    // Resume interview mode
-    if (extractedTopics.length >= 2) {
-      return extractedTopics.slice(0, count).map((topic, idx) => ({
-        id: idx + 1,
-        topic: topic,
-        basedOn: `Resume: ${topic}`,
-        question: `On your resume, you highlighted "${topic}". Could you walk me through your implementation, technical decisions, and the primary challenges you solved?`,
-      }));
-    }
-
-    if (subMode === "behavioral") {
-      const list = [
-        { id: 1, basedOn: "Stakeholder Alignment & Ambiguity", question: "Describe a project on your resume where specifications were unclear or changed late. How did you establish consensus and deliver?" },
-        { id: 2, basedOn: "Architectural Disagreements", question: "Tell me about a technical debate you had with a senior teammate. How did you present evidence and reach a constructive compromise?" },
-        { id: 3, basedOn: "Production Outage Resolution", question: "Walk me through the highest-stakes outage or bug you diagnosed. What was your triage sequence and what preventative measures did you implement?" },
-        { id: 4, basedOn: "Mentorship & Quality Standards", question: "How do you foster high code review standards and mentor junior developers without slowing down sprint velocity?" },
-        { id: 5, basedOn: "Prioritization Under Constraints", question: "When urgent bug reports clash with strategic technical debt reduction, what framework do you use to decide what gets built first?" }
-      ];
-      return list.slice(0, count);
-    } else if (subMode === "managerial") {
-      const list = [
-        { id: 1, basedOn: "System Reliability & SLAs", question: "How do you structure monitoring alerts and SLIs/SLOs to ensure issues are caught before clients notice degradation?" },
-        { id: 2, basedOn: "Capacity Planning & Spikes", question: "How do you architect system capacity and autoscaling to handle unforeseen 5x traffic surges without runaway cloud costs?" },
-        { id: 3, basedOn: "Technical Debt Governance", question: "How do you justify major architectural refactoring investments to non-technical executive stakeholders?" },
-        { id: 4, basedOn: "Cross-Team Dependencies", question: "How do you mitigate risks when your team's deliverables depend on third-party APIs or external team timelines?" }
-      ];
-      return list.slice(0, count);
-    } else if (subMode === "rapidfire") {
-      const list = [
-        { id: 1, basedOn: "Core Principles", question: `Explain the foundational distinction between static and dynamic analysis in 30 seconds.` },
-        { id: 2, basedOn: "Trade-offs", question: `What is the single biggest architectural trade-off you make when choosing distributed systems over monoliths?` },
-        { id: 3, basedOn: "State Management", question: `How do you guarantee consistency when coordinating state updates across multiple independent services?` },
-        { id: 4, basedOn: "Performance Bottlenecks", question: `When an application experiences high tail latency (p99), what is the first metric or resource you inspect?` },
-        { id: 5, basedOn: "Testing & Validation", question: `What is your strategy for catching critical regressions before code merges into production?` }
-      ];
-      return list.slice(0, count);
+        basedOn: rawTopic,
+        question: `Referring directly to your syllabus topic "${topic}", could you explain its core theoretical framework, key mechanisms, and practical significance?`,
+      });
     } else {
-      const list = [
-        { id: 1, basedOn: "Project Architecture", question: `Walk me through the architectural decisions behind your primary listed project. Why did you choose that particular stack and design?` },
-        { id: 2, basedOn: "Scalability & Bottlenecks", question: `What performance or scalability challenges did you encounter in your recent projects, and how did you diagnose and resolve them?` },
-        { id: 3, basedOn: "Data Integrity & Concurrency", question: `How do your applications safeguard data integrity and handle race conditions or concurrent access?` },
-        { id: 4, basedOn: "Testing & Quality Assurance", question: `Describe your testing methodology: how do you balance unit tests, integration tests, and edge case coverage?` },
-        { id: 5, basedOn: "Production Operations & Monitoring", question: `How do you monitor production health, track errors, and ensure system uptime for the systems you build?` }
-      ];
-      return list.slice(0, count);
+      questions.push({
+        id: i + 1,
+        topic: topic,
+        basedOn: rawTopic,
+        question: `On your resume, you listed "${topic}". What was your specific architectural contribution in this area, and what trade-offs or technical challenges did you encounter?`,
+      });
     }
   }
+  return questions;
 }
 
   // Comprehensive Body Language & Presence Coach Bank (Categorized, Diverse & Non-Repeating)
@@ -1118,20 +1171,6 @@ Return ONLY valid JSON in this exact structure:
         oralPresenceTips: "Speak with measured pacing, keep eye contact aligned with the camera, and pause 1 second before answering.",
       });
     }
-  });
-
-  // Global Express JSON error handler to prevent HTML error leak on payload too large or parse errors
-  app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
-    if (res.headersSent) {
-      return next(err);
-    }
-    console.error("[API Unhandled Error]", err?.message || err);
-    const statusCode = typeof err?.status === "number" ? err.status : (err?.type === "entity.too.large" ? 413 : 500);
-    const errorMessage =
-      err?.type === "entity.too.large"
-        ? "Uploaded file is too large for the network payload. Please select a smaller PDF or paste syllabus text."
-        : (err?.message || "An unexpected server error occurred.");
-    res.status(statusCode).json({ error: errorMessage });
   });
 
   return app;
