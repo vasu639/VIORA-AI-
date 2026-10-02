@@ -76,7 +76,8 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
   const [status, setStatus] = useState<"idle" | "loading" | "error" | "data" | "finished">("idle");
   const [errorMsg, setErrorMsg] = useState("");
   const [questions, setQuestions] = useState<QuestionItem[]>([]);
-  const [askedQuestionsHistory, setAskedQuestionsHistory] = useState<string[]>([]);
+  // State-based tracking mechanism: stores IDs and text fragments of already-asked questions in a Set
+  const [askedQuestionsSet, setAskedQuestionsSet] = useState<Set<string>>(() => new Set<string>());
   const [detectedSubject, setDetectedSubject] = useState<string | null>(null);
   const [detectedUnits, setDetectedUnits] = useState<string[] | null>(null);
   const [detectedKeySkills, setDetectedKeySkills] = useState<string[] | null>(null);
@@ -219,6 +220,11 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
     setStatus("loading");
     setErrorMsg("");
 
+    // Extract list of already-asked question text fragments from the state Set
+    const usedQuestionsList = Array.from(askedQuestionsSet)
+      .filter((item) => !item.startsWith("id:"))
+      .filter(Boolean);
+
     const payload = {
       mode,
       subMode: isViva ? undefined : subMode,
@@ -229,7 +235,8 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
       fileName: activeFileName,
       textContent: activeText,
       mimeType: activeMimeType,
-      previousQuestions: askedQuestionsHistory,
+      usedQuestions: usedQuestionsList,
+      previousQuestions: usedQuestionsList,
     };
 
     try {
@@ -250,9 +257,14 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
       }
 
       setQuestions(data.questions);
-      setAskedQuestionsHistory((prev) => {
-        const newlyGenerated = data.questions.map((q: any) => q.question);
-        return Array.from(new Set([...prev, ...newlyGenerated]));
+      // Update state-based tracking Set with IDs and text fragments of newly generated questions
+      setAskedQuestionsSet((prevSet) => {
+        const nextSet = new Set(prevSet);
+        data.questions.forEach((q: QuestionItem) => {
+          if (q.question) nextSet.add(q.question.trim());
+          if (q.id) nextSet.add(`id:${q.id}`);
+        });
+        return nextSet;
       });
 
       if (data.detectedSubject && (!courseName || courseName === "Course Syllabus")) {
@@ -297,6 +309,14 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
     setIsSubmittingAnswer(true);
 
     const currentQ = questions[currentIndex];
+    // Record current question text fragment and ID into state Set
+    setAskedQuestionsSet((prevSet) => {
+      const nextSet = new Set(prevSet);
+      if (currentQ?.question) nextSet.add(currentQ.question.trim());
+      if (currentQ?.id) nextSet.add(`id:${currentQ.id}`);
+      return nextSet;
+    });
+
     const newAnswer: AnswerItem = {
       questionId: currentQ.id,
       questionText: currentQ.question,
@@ -515,6 +535,7 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
     setSampleName(null);
     setCourseName("");
     setCompletedReport(null);
+    setAskedQuestionsSet(new Set<string>());
   };
 
   // 1. Loading State

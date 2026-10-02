@@ -250,6 +250,7 @@ export function createApiApp() {
       mimeType,
       textContent,
       previousQuestions = [],
+      usedQuestions = [],
     } = req.body;
 
     if (!fileBase64 && !textContent) {
@@ -257,7 +258,12 @@ export function createApiApp() {
     }
 
     const questionCount = Math.min(Math.max(Number(numQuestions) || 6, 3), 10);
-    const previousQsList = Array.isArray(previousQuestions) ? previousQuestions.filter(Boolean) : [];
+    // Track already-asked questions using a unique Set of question texts/fragments
+    const rawUsedList = Array.isArray(usedQuestions) && usedQuestions.length > 0
+      ? usedQuestions
+      : (Array.isArray(previousQuestions) ? previousQuestions : []);
+    const usedQuestionsSet = new Set(rawUsedList.map(String).map((s) => s.trim()).filter(Boolean));
+    const usedQuestionsList = Array.from(usedQuestionsSet);
     let extractedText = textContent ? String(textContent).trim() : "";
     let cleanBase64 = "";
     let detectedMime = mimeType || "";
@@ -355,11 +361,12 @@ export function createApiApp() {
       let prompt = "";
       const hasSpecificCourse = courseName && courseName.trim() && courseName !== "Course Syllabus" && courseName !== "Attached Syllabus";
 
-      const nonRepetitionDirective = previousQsList.length > 0
-        ? `\nCRITICAL MANDATORY NON-REPETITION REQUIREMENT:
-The candidate has ALREADY been asked these exact questions in previous sessions:
-${previousQsList.slice(-15).map((q: string, idx: number) => `(${idx + 1}) "${q}"`).join("\n")}
-YOU MUST NEVER REPEAT OR PARAPHRASE ANY OF THE ABOVE QUESTIONS. You MUST probe entirely DIFFERENT concepts, subsections, theorems, formulas, or applications from the document!\n`
+      const usedQuestionsFormatted = usedQuestionsList.length > 0
+        ? `Do not repeat these previously asked questions: [\n${usedQuestionsList.map((q) => `  "${q.replace(/"/g, '\\"')}"`).join(",\n")}\n]`
+        : "";
+
+      const nonRepetitionDirective = usedQuestionsList.length > 0
+        ? `\n${usedQuestionsFormatted}\n`
         : `\nEnsure a diverse, dynamic distribution of questions across all different units and chapters.\n`;
 
       if (mode === "viva") {
@@ -463,7 +470,7 @@ Return ONLY valid JSON matching this exact structure:
       contents.push({ text: prompt });
 
       console.log(
-        `[Gemini] Generating questions: mode=${mode}, course="${courseName || ""}", textLength=${extractedText.length}, prevCount=${previousQsList.length}`
+        `[Gemini] Generating questions: mode=${mode}, course="${courseName || ""}", textLength=${extractedText.length}, usedCount=${usedQuestionsList.length}`
       );
 
       const response = await generateContentWithRetry({
@@ -593,7 +600,7 @@ Return JSON:
           questionCount,
           level,
           subMode,
-          previousQsList
+          usedQuestionsList
         );
         if (textBasedQs.length > 0) {
           return res.status(200).json({
