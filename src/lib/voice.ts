@@ -51,6 +51,13 @@ export interface VoiceTranscriptResult {
   combinedText: string;
 }
 
+export interface VoiceRecognizerOptions {
+  onFinalChunk: (chunk: string) => void;
+  onInterimText?: (interim: string) => void;
+  onEnd?: () => void;
+  onError?: (err: string) => void;
+}
+
 export interface VoiceRecognizerController {
   start: () => void;
   stop: () => void;
@@ -58,11 +65,136 @@ export interface VoiceRecognizerController {
 }
 
 /**
- * Creates a SpeechRecognition instance that guarantees NO repeated words
- * or exploding text duplication when in continuous dictation mode.
+ * Normalizes a word for comparison by trimming, lowercasing, and stripping punctuation.
+ */
+export function normalizeWord(word: string): string {
+  return word.toLowerCase().replace(/^[^\w]+|[^\w]+$/g, "");
+}
+
+/**
+ * Comprehensive deduplication that removes:
+ * 1. Immediate duplicate sentences
+ * 2. Multi-word repeated phrases (length 10 down to 2)
+ * 3. Immediate duplicate single words (e.g. "the the", "is is", "memory memory")
+ */
+export function deduplicateRepeatedText(rawText: string): string {
+  if (!rawText || !rawText.trim()) return "";
+
+  // 1. Remove duplicate consecutive sentences
+  const sentences = rawText.split(/(?<=[.?!])\s+/);
+  const dedupedSentences: string[] = [];
+  for (const s of sentences) {
+    const trimmed = s.trim();
+    if (!trimmed) continue;
+    if (
+      dedupedSentences.length > 0 &&
+      normalizeWord(dedupedSentences[dedupedSentences.length - 1]) === normalizeWord(trimmed)
+    ) {
+      continue;
+    }
+    dedupedSentences.push(trimmed);
+  }
+  const cleanedText = dedupedSentences.join(" ");
+
+  // 2. Remove repeated word sequences of length k = 10 down to 1
+  const words = cleanedText.split(/\s+/).filter(Boolean);
+  if (words.length <= 1) return cleanedText.trim();
+
+  let modified = true;
+  let iterations = 0;
+
+  while (modified && iterations < 10) {
+    modified = false;
+    iterations++;
+
+    for (let k = Math.min(10, Math.floor(words.length / 2)); k >= 1; k--) {
+      for (let i = 0; i <= words.length - 2 * k; i++) {
+        let match = true;
+        for (let j = 0; j < k; j++) {
+          if (normalizeWord(words[i + j]) !== normalizeWord(words[i + k + j])) {
+            match = false;
+            break;
+          }
+        }
+
+        if (match) {
+          // Remove the duplicate phrase
+          words.splice(i + k, k);
+          modified = true;
+          break; // re-evaluate array after splice
+        }
+      }
+      if (modified) break;
+    }
+  }
+
+  return words.join(" ");
+}
+
+// Alias for backwards compatibility
+export const removeDuplicateWordsAndPhrases = deduplicateRepeatedText;
+
+/**
+ * Safely appends a new speech chunk to existing text:
+ * - Detects and removes any boundary overlap between the end of existing and the start of newChunk
+ * - Strips duplicate words/phrases
+ * - Ensures proper sentence capitalization and spacing
+ */
+export function appendSpeechChunk(existingText: string, newChunk: string): string {
+  const e = (existingText || "").trim();
+  const n = (newChunk || "").trim();
+
+  if (!e) return deduplicateRepeatedText(n);
+  if (!n) return deduplicateRepeatedText(e);
+
+  const eWords = e.split(/\s+/).filter(Boolean);
+  const nWords = n.split(/\s+/).filter(Boolean);
+
+  if (eWords.length === 0) return deduplicateRepeatedText(n);
+  if (nWords.length === 0) return deduplicateRepeatedText(e);
+
+  // Check overlap from max(eWords, nWords, 12) down to 1
+  const maxOverlap = Math.min(eWords.length, nWords.length, 12);
+  let bestOverlap = 0;
+
+  for (let k = maxOverlap; k >= 1; k--) {
+    const eSlice = eWords.slice(eWords.length - k);
+    const nSlice = nWords.slice(0, k);
+
+    let match = true;
+    for (let j = 0; j < k; j++) {
+      if (normalizeWord(eSlice[j]) !== normalizeWord(nSlice[j])) {
+        match = false;
+        break;
+      }
+    }
+
+    if (match) {
+      bestOverlap = k;
+      break;
+    }
+  }
+
+  let merged = "";
+  if (bestOverlap > 0) {
+    const remainder = nWords.slice(bestOverlap).join(" ");
+    merged = remainder ? `${e} ${remainder}` : e;
+  } else {
+    merged = `${e} ${n}`;
+  }
+
+  return deduplicateRepeatedText(merged);
+}
+
+// Alias for backwards compatibility
+export const stitchTranscripts = appendSpeechChunk;
+
+/**
+ * Creates an event.resultIndex-driven SpeechRecognition controller that completely
+ * eliminates speech repetition, Chromium bug 40484311 duplicates, and runaway text length.
  */
 export function createVoiceRecognizer(
-  onTranscript: (result: VoiceTranscriptResult) => void,
+  optionsOrTranscript: VoiceRecognizerOptions | ((result: VoiceTranscriptResult) => void),
   onEndCallback?: () => void,
   onErrorCallback?: (err: string) => void
 ): VoiceRecognizerController | null {
@@ -75,6 +207,44 @@ export function createVoiceRecognizer(
     return null;
   }
 
+  // Normalize callbacks
+  let onFinalChunk: (chunk: string) => void;
+  let onInterimText: (interim: string) => void;
+  let onEnd: () => void;
+  let onError: (err: string) => void;
+
+  if (typeof optionsOrTranscript === "function") {
+    // Legacy transcript callback adapter
+    let accumulatedFinal = "";
+    onFinalChunk = (chunk: string) => {
+      accumulatedFinal = appendSpeechChunk(accumulatedFinal, chunk);
+      optionsOrTranscript({
+        finalText: accumulatedFinal,
+        interimText: "",
+        combinedText: accumulatedFinal,
+      });
+    };
+    onInterimText = (interim: string) => {
+      const combined = appendSpeechChunk(accumulatedFinal, interim);
+      optionsOrTranscript({
+        finalText: accumulatedFinal,
+        interimText: interim,
+        combinedText: combined,
+      });
+    };
+    onEnd = () => {
+      if (onEndCallback) onEndCallback();
+    };
+    onError = (err: string) => {
+      if (onErrorCallback) onErrorCallback(err);
+    };
+  } else {
+    onFinalChunk = optionsOrTranscript.onFinalChunk;
+    onInterimText = optionsOrTranscript.onInterimText || (() => {});
+    onEnd = optionsOrTranscript.onEnd || onEndCallback || (() => {});
+    onError = optionsOrTranscript.onError || onErrorCallback || (() => {});
+  }
+
   try {
     const recognition = new SpeechRecognitionClass();
     recognition.lang = "en-US";
@@ -83,75 +253,106 @@ export function createVoiceRecognizer(
     recognition.maxAlternatives = 1;
 
     let isExplicitlyStopped = false;
+    let currentInterim = "";
+    let lastFinalizedChunk = "";
 
     recognition.onresult = (event: any) => {
-      let finalTranscript = "";
-      let interimTranscript = "";
+      let interim = "";
 
-      // In Web Speech API with continuous=true, event.results contains the entire list
-      // of speech chunks recognized during this active session.
-      // Iterating from 0 to results.length ensures we get the EXACT current state,
-      // never appending stale chunks to an already-accumulated state.
-      for (let i = 0; i < event.results.length; ++i) {
-        const item = event.results[i];
-        if (item && item[0]) {
-          const piece = item[0].transcript;
-          if (item.isFinal) {
-            finalTranscript += piece + " ";
-          } else {
-            interimTranscript += piece;
+      // CRITICAL: Iterate strictly from event.resultIndex to process ONLY newly received speech
+      // This prevents Chromium from re-processing and re-appending previously received chunks.
+      for (let i = event.resultIndex; i < event.results.length; ++i) {
+        const result = event.results[i];
+        if (result && result[0]) {
+          const piece = result[0].transcript.trim();
+          if (piece) {
+            if (result.isFinal) {
+              const cleaned = deduplicateRepeatedText(piece);
+              // Avoid duplicate delivery of identical final chunk
+              if (cleaned && cleaned !== lastFinalizedChunk) {
+                lastFinalizedChunk = cleaned;
+                currentInterim = "";
+                onFinalChunk(cleaned);
+              }
+            } else {
+              interim += piece + " ";
+            }
           }
         }
       }
 
-      const cleanFinal = finalTranscript.trim();
-      const cleanInterim = interimTranscript.trim();
-      const combined = (cleanFinal + " " + cleanInterim).replace(/\s+/g, " ").trim();
-
-      onTranscript({
-        finalText: cleanFinal,
-        interimText: cleanInterim,
-        combinedText: combined,
-      });
+      currentInterim = interim.trim();
+      onInterimText(currentInterim);
     };
 
     recognition.onerror = (event: any) => {
-      // "no-speech" is common when user pauses to think; not a fatal error
       if (event.error === "no-speech") {
-        return;
+        return; // normal pause while thinking
       }
       console.warn("Speech recognition event:", event.error);
-      if (onErrorCallback) {
-        onErrorCallback(event.error);
+      if (onError) {
+        onError(event.error);
       }
     };
 
     recognition.onend = () => {
-      if (!isExplicitlyStopped && onEndCallback) {
-        onEndCallback();
+      // If user paused and browser closed connection, auto-restart to keep mic active without duplication
+      if (!isExplicitlyStopped) {
+        try {
+          recognition.start();
+          return;
+        } catch (restartErr) {
+          // If restart fails (e.g. permission revoked), conclude cleanly
+        }
+      }
+
+      // If there was any non-finalized interim text when stopping, finalize it now so no speech is lost
+      if (currentInterim) {
+        const cleaned = deduplicateRepeatedText(currentInterim);
+        if (cleaned && cleaned !== lastFinalizedChunk) {
+          onFinalChunk(cleaned);
+        }
+        currentInterim = "";
+      }
+
+      if (onEnd) {
+        onEnd();
       }
     };
 
     return {
       start: () => {
         isExplicitlyStopped = false;
+        currentInterim = "";
+        lastFinalizedChunk = "";
         try {
           recognition.start();
         } catch (err) {
-          console.warn("Recognition already started or error:", err);
+          console.warn("Recognition start note:", err);
         }
       },
       stop: () => {
         isExplicitlyStopped = true;
+        // Finalize any pending interim text immediately
+        if (currentInterim) {
+          const cleaned = deduplicateRepeatedText(currentInterim);
+          if (cleaned && cleaned !== lastFinalizedChunk) {
+            onFinalChunk(cleaned);
+          }
+          currentInterim = "";
+          onInterimText("");
+        }
         try {
           recognition.stop();
         } catch (e) {}
-        if (onEndCallback) {
-          onEndCallback();
+        if (onEnd) {
+          onEnd();
         }
       },
       abort: () => {
         isExplicitlyStopped = true;
+        currentInterim = "";
+        onInterimText("");
         try {
           recognition.abort();
         } catch (e) {}

@@ -20,8 +20,9 @@ import {
   stopSpeaking,
   createVoiceRecognizer,
   isSpeechRecognitionSupported,
+  appendSpeechChunk,
+  deduplicateRepeatedText,
   VoiceRecognizerController,
-  VoiceTranscriptResult,
 } from "../lib/voice";
 
 export interface CoachTipData {
@@ -72,16 +73,12 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
   } | null>(null);
   const [isEvaluating, setIsEvaluating] = useState(false);
 
-  // Ref to hold text that existed before the user started the current voice dictation session.
-  // This ensures newly recognized speech NEVER duplicates or multiplies earlier text.
-  const baseTextRef = useRef<string>("");
   const recognizerRef = useRef<VoiceRecognizerController | null>(null);
   const recognitionSupported = isSpeechRecognitionSupported();
 
   // Reset states when question changes
   useEffect(() => {
     setAnswerText("");
-    baseTextRef.current = "";
     setInterimPreview("");
     setQuickFeedback(null);
     setAnsweredByVoice(false);
@@ -124,53 +121,35 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
       }
       setIsRecordingVoice(false);
       setInterimPreview("");
-      // Lock current answer into baseTextRef so any subsequent voice dictation appends after it
-      baseTextRef.current = answerText.trim();
+      setAnswerText((prev) => deduplicateRepeatedText(prev));
       return;
     }
 
     // Stop speaking question aloud if it was active
     stopSpeaking();
     setIsSpeakingQuestion(false);
-
-    // Save existing text as the starting base for this dictation session
-    baseTextRef.current = answerText.trim();
     setInterimPreview("");
 
-    const recognizer = createVoiceRecognizer(
-      (result: VoiceTranscriptResult) => {
-        // Build the combined string: existing text + newly recognized speech of this session
-        const base = baseTextRef.current;
-        const newSpeech = result.combinedText;
-
-        if (!newSpeech) {
-          return;
-        }
-
-        const fullText = base ? `${base} ${newSpeech}` : newSpeech;
-        // Clean single spaces
-        const cleanText = fullText.replace(/\s+/g, " ");
-
-        setAnswerText(cleanText);
-        setInterimPreview(result.interimText);
+    // Initialize speech recognition with strict single-chunk finalization to avoid duplication
+    const recognizer = createVoiceRecognizer({
+      onFinalChunk: (chunk: string) => {
+        setAnswerText((prev) => appendSpeechChunk(prev, chunk));
         setAnsweredByVoice(true);
       },
-      () => {
-        // Recognizer ended (either by stop button, user pause, or browser silence)
+      onInterimText: (interim: string) => {
+        setInterimPreview(interim);
+      },
+      onEnd: () => {
         setIsRecordingVoice(false);
         setInterimPreview("");
-        // Commit current text to baseTextRef
-        setAnswerText((curr) => {
-          baseTextRef.current = curr.trim();
-          return curr;
-        });
+        setAnswerText((prev) => deduplicateRepeatedText(prev));
       },
-      (err) => {
+      onError: (err: string) => {
         console.warn("Speech recognition error:", err);
         setIsRecordingVoice(false);
         setInterimPreview("");
-      }
-    );
+      },
+    });
 
     if (recognizer) {
       recognizerRef.current = recognizer;
@@ -189,13 +168,14 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
       setIsRecordingVoice(false);
     }
     setAnswerText("");
-    baseTextRef.current = "";
     setInterimPreview("");
     setQuickFeedback(null);
   };
 
   const handleQuickCritique = async () => {
-    if (!answerText.trim() || isEvaluating) return;
+    const cleaned = deduplicateRepeatedText(answerText.trim());
+    if (!cleaned || isEvaluating) return;
+    setAnswerText(cleaned);
     setIsEvaluating(true);
     try {
       const res = await fetch("/api/evaluate-answer", {
@@ -203,7 +183,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           question: question.question,
-          answer: answerText,
+          answer: cleaned,
           topicOrGrounding: question.topic || question.basedOn,
           mode,
         }),
@@ -223,7 +203,9 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
       setIsRecordingVoice(false);
       setInterimPreview("");
     }
-    await onAnswerSubmit(answerText.trim(), answeredByVoice);
+    const cleaned = deduplicateRepeatedText(answerText.trim());
+    setAnswerText(cleaned);
+    await onAnswerSubmit(cleaned, answeredByVoice);
   };
 
   const progressPercent = Math.round(((currentIndex + 1) / totalQuestions) * 100);
@@ -414,10 +396,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
         <div className="relative">
           <textarea
             value={answerText}
-            onChange={(e) => {
-              setAnswerText(e.target.value);
-              baseTextRef.current = e.target.value;
-            }}
+            onChange={(e) => setAnswerText(e.target.value)}
             placeholder="Speak with the mic above or type your explanation here... (e.g. key principles, real architecture trade-offs, edge cases)"
             rows={5}
             className={`w-full px-4 py-3.5 text-sm text-[#16233C] dark:text-white bg-white dark:bg-slate-800 border rounded-xl transition-all resize-y shadow-2xs placeholder:text-slate-400 dark:placeholder:text-slate-500 ${
