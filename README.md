@@ -198,47 +198,47 @@ flowchart TD
     classDef endNode fill:#10B981,stroke:#047857,stroke-width:2px,color:#fff;
 
     Start(["🚀 User Launches Viora AI"]):::startNode
-    Auth{"🔐 Sign In\n(Email, Google, or 1-Click Demo)"}:::modeNode
+    Auth{"🔐 Sign In<br/>(Email, Google, or 1-Click Demo)"}:::modeNode
 
     Start --> Auth
     Auth --> SelectMode["🎯 Choose Assessment Track"]:::processNode
 
-    SelectMode -->|Track 1| VivaMode["📖 Viva-Voce Mode\n(College Semester Oral Defense)"]:::processNode
-    SelectMode -->|Track 2| InterviewMode["💼 Mock Interview Mode\n(Job & Industry Preparation)"]:::processNode
+    SelectMode -->|"Track 1"| VivaMode["📖 Viva-Voce Mode<br/>(College Semester Oral Defense)"]:::processNode
+    SelectMode -->|"Track 2"| InterviewMode["💼 Mock Interview Mode<br/>(Job & Industry Preparation)"]:::processNode
 
     %% Viva Branch
-    VivaMode --> UploadSyllabus["📤 Upload Syllabus Document\n(PDF, DOCX, or TXT)\n• Set Course & Degree\n• Select Difficulty: Beginner / Intermediate / Advanced"]:::processNode
+    VivaMode --> UploadSyllabus["📤 Upload Syllabus Document<br/>(PDF, DOCX, or TXT)<br/>• Set Course & Degree<br/>• Select Difficulty: Beginner / Intermediate / Advanced"]:::processNode
 
     %% Interview Branch
-    InterviewMode --> UploadResume["📤 Upload Resume / CV\n(PDF, DOCX, or TXT)\n• Set Target Job Role\n• Select Format: Technical / Behavioral / Managerial / Rapid Fire"]:::processNode
+    InterviewMode --> UploadResume["📤 Upload Resume / CV<br/>(PDF, DOCX, or TXT)<br/>• Set Target Job Role<br/>• Select Format: Technical / Behavioral / Managerial / Rapid Fire"]:::processNode
 
     %% AI Grounding
-    UploadSyllabus --> GeminiParse["🧠 Google Gemini 3.8 Flash Ingestion\n• Reads Modules, Theorems, Projects & Tools\n• 100% Strictly Grounded (No Generic Hallucinations)\n• Generates Tailored Oral Questions"]:::aiNode
+    UploadSyllabus --> GeminiParse["🧠 Google Gemini 3.8 Flash Ingestion<br/>• Reads Modules, Theorems, Projects & Tools<br/>• 100% Strictly Grounded (No Generic Hallucinations)<br/>• Generates Tailored Oral Questions"]:::aiNode
     UploadResume --> GeminiParse
 
     GeminiParse --> StartSession["🎙️ Start Active Oral Examination"]:::processNode
 
     %% Examination Loop
     subgraph ExamLoop [" 🔁 Active Examination Loop (Question-by-Question) "]
-        ExaminerPrompt["🔊 1. Examiner Asks Question Aloud\n(Text-to-Speech + Audio Wave Animation)"]:::loopNode
-        CameraCoach["📷 Live Camera & Posture Coach\n(Webcam analyzes eye-contact, posture & framing)"]:::aiNode
-        CandidateAnswer["🗣️ 2. Candidate Speaks Oral Answer\n(Real-Time Speech-to-Text Transcription)"]:::loopNode
+        ExaminerPrompt["🔊 1. Examiner Asks Question Aloud<br/>(Text-to-Speech + Audio Wave Animation)"]:::loopNode
+        CameraCoach["📷 Live Camera & Posture Coach<br/>(Webcam analyzes eye-contact, posture & framing)"]:::aiNode
+        CandidateAnswer["🗣️ 2. Candidate Speaks Oral Answer<br/>(Real-Time Speech-to-Text Transcription)"]:::loopNode
         SubmitAnswer["📨 3. Submit Response for Grading"]:::loopNode
-        EvaluateAnswer["⚡ 4. Real-Time Gemini Evaluation:\n• Technical Correctness (0-100%)\n• Oral Confidence & Clarity (0-100%)\n• What was right, what was missed, & key takeaway"]:::aiNode
-        NextDecision{"Any More\nQuestions?"}:::modeNode
+        EvaluateAnswer["⚡ 4. Real-Time Gemini Evaluation:<br/>• Technical Correctness: 0-100%<br/>• Oral Confidence & Clarity: 0-100%<br/>• Strengths, Gaps & Key Takeaway"]:::aiNode
+        NextDecision{"Any More<br/>Questions?"}:::modeNode
 
         ExaminerPrompt --> CandidateAnswer
-        CameraCoach -.->|Actionable Body Language Tip| CandidateAnswer
+        CameraCoach -.->|"Actionable Body Language Tip"| CandidateAnswer
         CandidateAnswer --> SubmitAnswer
         SubmitAnswer --> EvaluateAnswer
         EvaluateAnswer --> NextDecision
-        NextDecision -->|Yes (Next Question)| ExaminerPrompt
+        NextDecision -->|"Yes (Next Question)"| ExaminerPrompt
     end
 
     StartSession --> ExaminerPrompt
-    NextDecision -->|No (All Questions Completed)| FinalEval["📊 Holistic Session Assessment\n(Gemini evaluates complete Q&A transcript)"]:::aiNode
+    NextDecision -->|"No (All Questions Completed)"| FinalEval["📊 Holistic Session Assessment<br/>(Gemini evaluates complete Q&A transcript)"]:::aiNode
 
-    FinalEval --> ResultsReport["🏆 Comprehensive Diagnostic Scorecard\n• Genuine Merit Percentage (Uninflated)\n• College Viva or Job Readiness Probability %\n• Official Grade (Distinction / Merit / Pass / Retake)\n• Categorized Strengths & Improvement Areas\n• Examiner Feedback & Body Language Critique"]:::scoreNode
+    FinalEval --> ResultsReport["🏆 Comprehensive Diagnostic Scorecard<br/>• Genuine Merit Percentage (Uninflated)<br/>• College Viva or Job Readiness Probability %<br/>• Official Grade: Distinction / Merit / Pass / Retake<br/>• Categorized Strengths & Improvement Areas<br/>• Examiner Feedback & Body Language Critique"]:::scoreNode
 
     ResultsReport --> Actions{"🎯 Post-Exam Actions"}:::modeNode
     Actions --> SaveCloud["☁️ Auto-Save Session to Cloud Firestore"]:::processNode
@@ -283,16 +283,16 @@ flowchart LR
         FIRESTORE[("Cloud Firestore DB")]:::cloud
     end
 
-    ClientLayer -->|Upload Syllabus/Resume (Base64)| API
-    ClientLayer -->|Webcam Snapshot & Oral Transcript| API
+    ClientLayer -->|"Upload Syllabus / Resume (Base64)"| API
+    ClientLayer -->|"Webcam Snapshot & Oral Transcript"| API
     API --> MAMMOTH
     API --> TIPS
-    API -->|Prompt + Binary File Payload| GEMINI
+    API -->|"Prompt + Binary File Payload"| GEMINI
     GEMINI --> PARSER
     GEMINI --> GRADER
-    GEMINI -->|Structured JSON Evaluation| API
-    API -->|Normalized Response| ClientLayer
-    ClientLayer <-->|User Auth & Auto-Sync Reports| CloudLayer
+    GEMINI -->|"Structured JSON Evaluation"| API
+    API -->|"Normalized Response"| ClientLayer
+    ClientLayer <-->|"User Auth & Auto-Sync Reports"| CloudLayer
 ```
 
 ---
@@ -302,11 +302,11 @@ flowchart LR
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Candidate as Student / Candidate
-    participant App as Viora Frontend (React)
-    participant Server as Express Backend
-    participant Gemini as Google Gemini 3.8 Flash
-    participant DB as Cloud Firestore
+    actor Candidate as "Student / Candidate"
+    participant App as "Viora Frontend (React)"
+    participant Server as "Express Backend"
+    participant Gemini as "Google Gemini 3.8 Flash"
+    participant DB as "Cloud Firestore"
 
     Candidate->>App: 1. Sign in (Email, Google, or 1-Click Demo)
     Candidate->>App: 2. Select Mode (Viva Voce or Technical Interview)
