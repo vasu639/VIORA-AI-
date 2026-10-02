@@ -22,7 +22,8 @@ interface FileUploadProps {
     file: File | null,
     base64: string | null,
     text: string | null,
-    sampleName: string | null
+    sampleName: string | null,
+    detectedMeta?: { detectedSubject?: string; detectedUnits?: string[]; wordCount?: number } | null
   ) => void;
   error?: string | null;
 }
@@ -96,6 +97,11 @@ export const FileUpload: React.FC<FileUploadProps> = ({
   const [localError, setLocalError] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [pastedText, setPastedText] = useState("");
+  const [extractionMeta, setExtractionMeta] = useState<{
+    wordCount: number;
+    detectedSubject?: string;
+    detectedUnits?: string[];
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isViva = mode === "viva";
@@ -106,6 +112,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
 
   const handleFileChange = async (selectedFile: File) => {
     setLocalError(null);
+    setExtractionMeta(null);
     const validationError = validateFile(selectedFile);
     if (validationError) {
       setLocalError(validationError);
@@ -123,10 +130,41 @@ export const FileUpload: React.FC<FileUploadProps> = ({
       if (isPlainText) {
         const text = await readFileAsText(selectedFile);
         const base64 = await fileToBase64(selectedFile);
-        onFileSelect(selectedFile, base64, text, null);
+        const words = text.trim().split(/\s+/).filter(Boolean).length;
+        const meta = { wordCount: words };
+        setExtractionMeta(meta);
+        onFileSelect(selectedFile, base64, text, null, meta);
       } else {
         const base64 = await fileToBase64(selectedFile);
-        onFileSelect(selectedFile, base64, null, null);
+        let extractedText: string | null = null;
+        let detectedMeta: { detectedSubject?: string; detectedUnits?: string[]; wordCount?: number } | null = null;
+        try {
+          // Pre-extract document text via pdf-parse/mammoth on server so Gemini has full text
+          const res = await fetch("/api/extract-text", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              fileBase64: base64,
+              fileName: selectedFile.name,
+              mimeType: selectedFile.type,
+            }),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.text) {
+              extractedText = data.text;
+              detectedMeta = {
+                detectedSubject: data.detectedSubject,
+                detectedUnits: data.detectedUnits,
+                wordCount: data.wordCount,
+              };
+              setExtractionMeta(detectedMeta as any);
+            }
+          }
+        } catch (extErr) {
+          console.warn("Client extraction notice:", extErr);
+        }
+        onFileSelect(selectedFile, base64, extractedText, null, detectedMeta);
       }
     } catch (e) {
       console.error(e);
@@ -180,8 +218,9 @@ export const FileUpload: React.FC<FileUploadProps> = ({
 
   const handleClear = () => {
     setLocalError(null);
+    setExtractionMeta(null);
     setPastedText("");
-    onFileSelect(null, null, null, null);
+    onFileSelect(null, null, null, null, null);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -291,12 +330,36 @@ export const FileUpload: React.FC<FileUploadProps> = ({
               type="button"
               onClick={handleClear}
               id="clear-uploaded-doc-btn"
-              className="p-1.5 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-white dark:hover:bg-slate-800 rounded-lg transition-colors shrink-0"
+              className="p-1.5 text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-white dark:hover:bg-slate-800 rounded-lg transition-colors shrink-0 cursor-pointer"
               title="Replace document"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
+
+          {/* Extraction Confirmation Badge */}
+          {extractionMeta && (
+            <div className="p-2.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 rounded-lg text-xs space-y-1">
+              <div className="flex items-center gap-1.5 text-emerald-800 dark:text-emerald-300 font-semibold">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <span>Text Successfully Parsed from PDF ({extractionMeta.wordCount.toLocaleString()} words)</span>
+              </div>
+              {extractionMeta.detectedSubject && (
+                <p className="text-[11px] text-emerald-700 dark:text-emerald-400 pl-5">
+                  Detected Subject: <strong className="text-emerald-900 dark:text-emerald-200">{extractionMeta.detectedSubject}</strong>
+                </p>
+              )}
+              {extractionMeta.detectedUnits && extractionMeta.detectedUnits.length > 0 && (
+                <div className="flex flex-wrap gap-1 pl-5 pt-0.5">
+                  {extractionMeta.detectedUnits.slice(0, 3).map((u, idx) => (
+                    <span key={idx} className="px-1.5 py-0.5 bg-emerald-100/70 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-300 text-[10px] rounded">
+                      {u}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Text Snippet Preview if text available */}
           {textContent && (

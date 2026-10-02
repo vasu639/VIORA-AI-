@@ -76,6 +76,7 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
   const [status, setStatus] = useState<"idle" | "loading" | "error" | "data" | "finished">("idle");
   const [errorMsg, setErrorMsg] = useState("");
   const [questions, setQuestions] = useState<QuestionItem[]>([]);
+  const [askedQuestionsHistory, setAskedQuestionsHistory] = useState<string[]>([]);
   const [detectedSubject, setDetectedSubject] = useState<string | null>(null);
   const [detectedUnits, setDetectedUnits] = useState<string[] | null>(null);
   const [detectedKeySkills, setDetectedKeySkills] = useState<string[] | null>(null);
@@ -91,13 +92,23 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
     newFile: File | null,
     base64: string | null,
     text: string | null,
-    chosenSampleName: string | null
+    chosenSampleName: string | null,
+    detectedMeta?: { detectedSubject?: string; detectedUnits?: string[]; wordCount?: number } | null
   ) => {
     setFile(newFile);
     setFileBase64(base64);
     setTextContent(text);
     setSampleName(chosenSampleName);
     setValidationError(null);
+
+    // Auto fill course name if detected from PDF syllabus
+    if (detectedMeta?.detectedSubject) {
+      setCourseName(detectedMeta.detectedSubject);
+      setDetectedSubject(detectedMeta.detectedSubject);
+    }
+    if (detectedMeta?.detectedUnits && detectedMeta.detectedUnits.length > 0) {
+      setDetectedUnits(detectedMeta.detectedUnits);
+    }
 
     // Auto fill course name if viva sample is selected
     if (isViva && chosenSampleName && !courseName) {
@@ -218,6 +229,7 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
       fileName: activeFileName,
       textContent: activeText,
       mimeType: activeMimeType,
+      previousQuestions: askedQuestionsHistory,
     };
 
     try {
@@ -238,6 +250,11 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
       }
 
       setQuestions(data.questions);
+      setAskedQuestionsHistory((prev) => {
+        const newlyGenerated = data.questions.map((q: any) => q.question);
+        return Array.from(new Set([...prev, ...newlyGenerated]));
+      });
+
       if (data.detectedSubject && (!courseName || courseName === "Course Syllabus")) {
         setCourseName(data.detectedSubject);
       }
@@ -260,6 +277,19 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
       setErrorMsg(err.message || "An unexpected error occurred while generating questions.");
       setStatus("error");
     }
+  };
+
+  // User requests a completely new, non-repeating set of questions from their syllabus
+  const handleRegenerateDifferentQuestions = () => {
+    handleGenerateQuestions({
+      fileBase64,
+      textContent,
+      courseName,
+      level: difficulty,
+      numQuestions,
+      fileName: file?.name || sampleName || undefined,
+      mimeType: file?.type || (fileBase64 ? "application/pdf" : undefined),
+    });
   };
 
   // Handle Candidate Answer Submission
@@ -465,9 +495,16 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
   };
 
   const handleRetake = () => {
-    setCurrentIndex(0);
-    setAnswers([]);
-    setStatus("data");
+    // Retake must generate a fresh, non-repeating set of questions avoiding previously asked questions
+    handleGenerateQuestions({
+      fileBase64,
+      textContent,
+      courseName,
+      level: difficulty,
+      numQuestions,
+      fileName: file?.name || sampleName || undefined,
+      mimeType: file?.type || (fileBase64 ? "application/pdf" : undefined),
+    });
   };
 
   const handleStartNew = () => {
@@ -565,6 +602,7 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
               onRequestNewTip={fetchCoachTip}
               onAnswerSubmit={handleAnswerSubmit}
               isSubmitting={isSubmittingAnswer}
+              onRegenerateQuestions={handleRegenerateDifferentQuestions}
             />
           </div>
 
@@ -653,6 +691,19 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
                   </div>
                 </div>
               )}
+
+              {/* Fresh Questions Regenerator */}
+              <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={handleRegenerateDifferentQuestions}
+                  disabled={isSubmittingAnswer}
+                  className="w-full inline-flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 border border-blue-200 dark:border-blue-800 text-xs font-semibold text-[#2F6FED] dark:text-blue-300 transition-colors cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Ask Different Questions From PDF</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>

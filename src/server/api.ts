@@ -249,6 +249,7 @@ export function createApiApp() {
       fileName,
       mimeType,
       textContent,
+      previousQuestions = [],
     } = req.body;
 
     if (!fileBase64 && !textContent) {
@@ -256,6 +257,7 @@ export function createApiApp() {
     }
 
     const questionCount = Math.min(Math.max(Number(numQuestions) || 6, 3), 10);
+    const previousQsList = Array.isArray(previousQuestions) ? previousQuestions.filter(Boolean) : [];
     let extractedText = textContent ? String(textContent).trim() : "";
     let cleanBase64 = "";
     let detectedMime = mimeType || "";
@@ -353,12 +355,20 @@ export function createApiApp() {
       let prompt = "";
       const hasSpecificCourse = courseName && courseName.trim() && courseName !== "Course Syllabus" && courseName !== "Attached Syllabus";
 
+      const nonRepetitionDirective = previousQsList.length > 0
+        ? `\nCRITICAL MANDATORY NON-REPETITION REQUIREMENT:
+The candidate has ALREADY been asked these exact questions in previous sessions:
+${previousQsList.slice(-15).map((q: string, idx: number) => `(${idx + 1}) "${q}"`).join("\n")}
+YOU MUST NEVER REPEAT OR PARAPHRASE ANY OF THE ABOVE QUESTIONS. You MUST probe entirely DIFFERENT concepts, subsections, theorems, formulas, or applications from the document!\n`
+        : `\nEnsure a diverse, dynamic distribution of questions across all different units and chapters.\n`;
+
       if (mode === "viva") {
         prompt = `You are a strict, formal university oral viva-voce examiner.
 YOUR EXCLUSIVE AND MANDATORY SOURCE OF TRUTH IS THE CANDIDATE'S ATTACHED SYLLABUS / CURRICULUM DOCUMENT.
 ${hasSpecificCourse ? `Target Course Name: "${courseName}"` : `Extract the exact course/subject title directly from the document.`}
 Exam Difficulty: ${level || "Intermediate"}.
-
+Session Randomization Seed: ${Date.now()}-${Math.random().toString(36).substring(7)}
+${nonRepetitionDirective}
 CRITICAL MANDATORY RULES — 100% STRICT DOCUMENT GROUNDING (ABSOLUTE REQUIREMENT):
 1. ZERO HALLUCINATION & ZERO OUTSIDE TOPICS:
    - You MUST generate questions derived EXCLUSIVELY and DIRECTLY from the text, modules, chapters, formulas, theorems, mechanisms, and topics that appear inside the provided document.
@@ -396,7 +406,8 @@ Return ONLY valid JSON matching this exact structure:
         const selectedSubMode = subMode || "technical";
         prompt = `You are an expert technical interviewer conducting a ${selectedSubMode} interview.
 YOUR EXCLUSIVE AND MANDATORY SOURCE OF CONTEXT IS THE CANDIDATE'S ATTACHED RESUME / CV DOCUMENT.
-
+Session Randomization Seed: ${Date.now()}-${Math.random().toString(36).substring(7)}
+${nonRepetitionDirective}
 CRITICAL MANDATORY RULES — 100% STRICT RESUME GROUNDING (ABSOLUTE REQUIREMENT):
 1. ZERO GENERIC INTERVIEW QUESTIONS:
    - You are STRICTLY FORBIDDEN from asking generic textbook questions (e.g. "What is OOP?", "Where do you see yourself in 5 years?", "Explain a binary search tree").
@@ -432,16 +443,15 @@ Return ONLY valid JSON matching this exact structure:
 }`;
       }
 
-      // Build multimodal contents array: verbatim document text first, binary file data second, prompt last
+      // Build multimodal contents array: verbatim document text first, binary file data only if needed
       const contents: Array<any> = [];
 
       if (extractedText && extractedText.trim().length > 0) {
         contents.push({
-          text: `==================== VERBATIM UPLOADED DOCUMENT CONTENT ====================\n${extractedText.slice(0, 100000)}\n============================================================================`,
+          text: `==================== VERBATIM UPLOADED SYLLABUS / RESUME CONTENT ====================\n${extractedText.slice(0, 100000)}\n=====================================================================================`,
         });
-      }
-
-      if (cleanBase64) {
+      } else if (cleanBase64) {
+        // Fall back to inlineData only if text could not be extracted directly
         contents.push({
           inlineData: {
             mimeType: detectedMime,
@@ -453,13 +463,14 @@ Return ONLY valid JSON matching this exact structure:
       contents.push({ text: prompt });
 
       console.log(
-        `[Gemini] Generating questions: mode=${mode}, course="${courseName || ""}", hasBase64=${!!cleanBase64}, mime=${detectedMime}, textLength=${extractedText.length}`
+        `[Gemini] Generating questions: mode=${mode}, course="${courseName || ""}", textLength=${extractedText.length}, prevCount=${previousQsList.length}`
       );
 
       const response = await generateContentWithRetry({
         contents,
         config: {
           responseMimeType: "application/json",
+          temperature: 0.95, // Guarantees fresh, diverse question selection
         },
       });
 
@@ -576,7 +587,14 @@ Return JSON:
 
       // If document text was extracted, extract syllabus headings directly from extractedText to create grounded questions
       if (extractedText && extractedText.trim().length > 30) {
-        const textBasedQs = generateQuestionsFromDocumentText(extractedText, mode, questionCount, level, subMode);
+        const textBasedQs = generateQuestionsFromDocumentText(
+          extractedText,
+          mode,
+          questionCount,
+          level,
+          subMode,
+          previousQsList
+        );
         if (textBasedQs.length > 0) {
           return res.status(200).json({
             questions: textBasedQs,
@@ -597,7 +615,8 @@ function generateQuestionsFromDocumentText(
   mode: string,
   count: number,
   level: string = "Intermediate",
-  subMode: string = "technical"
+  subMode: string = "technical",
+  previousQuestions: string[] = []
 ): Array<{ id: number; question: string; topic: string; basedOn: string }> {
   const lines = docText.split("\n").map(l => l.trim()).filter(l => l.length > 3);
   // Find lines that look like units, modules, chapters, or headings
@@ -607,26 +626,49 @@ function generateQuestionsFromDocumentText(
     return headingKeywords.some(kw => lower.includes(kw)) || (l.length < 90 && (l.endsWith(":") || /^[0-9]+[\.\)]/.test(l)));
   });
 
-  const topicsToUse = headings.length >= 3 ? headings : lines.filter(l => l.length > 8 && l.length < 100);
-  const selectedTopics = topicsToUse.slice(0, count * 2);
+  const availableTopics = headings.length >= 3 ? headings : lines.filter(l => l.length > 8 && l.length < 100);
+  // Shuffle available topics with random offset to prevent same question order
+  const shuffled = [...availableTopics].sort(() => Math.random() - 0.5);
+
+  // Avoid topics that appeared in previousQuestions if possible
+  const prevLower = previousQuestions.map(p => p.toLowerCase());
+  const freshTopics = shuffled.filter(t => !prevLower.some(p => p.includes(t.toLowerCase().slice(0, 15))));
+  const selectedTopics = freshTopics.length >= count ? freshTopics : shuffled;
+
+  const vivaTemplates = [
+    (t: string, b: string) => `Looking at ${b}, explain the governing mechanism of "${t}" and analyze how it resolves fundamental engineering or theoretical trade-offs.`,
+    (t: string, b: string) => `In your syllabus module on ${b}, what is the critical mathematical or procedural distinction between "${t}" and its adjacent principles?`,
+    (t: string, b: string) => `Walk me through a concrete practical scenario involving "${t}". What boundary conditions or failure modes must an engineer anticipate?`,
+    (t: string, b: string) => `Regarding "${t}" from ${b}, what step-by-step analytical derivation or workflow is used to verify its correctness?`,
+    (t: string, b: string) => `If an experimental or real-world implementation of "${t}" produces anomalous behavior, how would you diagnose and optimize it?`,
+    (t: string, b: string) => `How does "${t}" integrate into the broader theoretical framework outlined in ${b}? Cite its key laws or principles.`,
+  ];
+
+  const interviewTemplates = [
+    (t: string, b: string) => `On your resume under "${b}", you highlighted "${t}". What architectural decisions did you make, and what metrics or benchmarks validated your solution?`,
+    (t: string, b: string) => `Walking through your work on "${t}", how did you address edge cases, scalability bottlenecks, or concurrency hazards?`,
+    (t: string, b: string) => `Regarding your implementation of "${t}" at ${b}, what trade-offs did you evaluate between developer velocity and system performance?`,
+  ];
 
   const questions: Array<{ id: number; question: string; topic: string; basedOn: string }> = [];
   for (let i = 0; i < count; i++) {
     const rawTopic = selectedTopics[i % selectedTopics.length] || `Document Topic ${i + 1}`;
     const topic = rawTopic.replace(/^[-*•\d\.\)\s]+/, "").trim();
     if (mode === "viva") {
+      const templateFn = vivaTemplates[(i + Math.floor(Math.random() * vivaTemplates.length)) % vivaTemplates.length];
       questions.push({
         id: i + 1,
         topic: topic,
         basedOn: rawTopic,
-        question: `Referring directly to your syllabus topic "${topic}", could you explain its core theoretical framework, key mechanisms, and practical significance?`,
+        question: templateFn(topic, rawTopic),
       });
     } else {
+      const templateFn = interviewTemplates[i % interviewTemplates.length];
       questions.push({
         id: i + 1,
         topic: topic,
         basedOn: rawTopic,
-        question: `On your resume, you listed "${topic}". What was your specific architectural contribution in this area, and what trade-offs or technical challenges did you encounter?`,
+        question: templateFn(topic, rawTopic),
       });
     }
   }
