@@ -55,6 +55,8 @@ export interface SessionReport {
   strengths?: string[];
   improvements?: string[];
   oralPresenceTips?: string;
+  githubUsername?: string;
+  evidenceReport?: EvidenceReport;
   createdAt: number;
 }
 

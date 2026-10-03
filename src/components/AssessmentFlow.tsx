@@ -847,22 +847,87 @@ export const AssessmentFlow: React.FC<AssessmentFlowProps> = ({
           </div>
         ) : (
           <div className="space-y-4 pt-2 border-t border-slate-100 dark:border-slate-800">
-            <div>
-              <label className="block text-xs font-bold uppercase tracking-wider text-[#0B1A33] dark:text-slate-200 mb-1.5">
-                Target Job Role <span className="text-slate-400 font-normal">(for Technical Interview Readiness %)</span>
+            {/* Target Role Selector */}
+            <div className="space-y-2">
+              <label className="block text-xs font-bold uppercase tracking-wider text-[#0B1A33] dark:text-slate-200">
+                1. Target Role & Learning Goal
               </label>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {[
+                  "Frontend Developer",
+                  "Backend Developer",
+                  "Python Developer",
+                  "Data Analyst",
+                  "Full Stack Developer",
+                ].map((role) => (
+                  <button
+                    key={role}
+                    type="button"
+                    onClick={() => setTargetRole(role)}
+                    className={`py-2 px-3 rounded-xl text-xs font-bold border transition-all text-center ${
+                      targetRole === role
+                        ? "bg-[#2F6FED] text-white border-[#2F6FED] shadow-2xs"
+                        : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-slate-300"
+                    }`}
+                  >
+                    {role}
+                  </button>
+                ))}
+              </div>
               <input
                 type="text"
                 value={targetRole}
                 onChange={(e) => setTargetRole(e.target.value)}
-                placeholder="e.g. Full Stack Developer, Frontend Engineer, Data Analyst, Cloud DevOps..."
-                className="w-full px-4 py-2.5 text-sm text-[#16233C] dark:text-white bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 focus:border-[#2F6FED] focus:ring-2 focus:ring-blue-100 dark:focus:ring-blue-900/40 rounded-xl transition-all shadow-2xs"
+                placeholder="Or specify custom role: e.g. Cloud DevOps Engineer..."
+                className="w-full px-4 py-2 text-xs text-[#16233C] dark:text-white bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 focus:border-[#2F6FED] rounded-xl mt-1.5"
               />
+            </div>
+
+            {/* Public GitHub Username Input */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-bold uppercase tracking-wider text-[#0B1A33] dark:text-slate-200">
+                  2. Public GitHub Username <span className="text-slate-400 font-normal">(for Skill Proof verification)</span>
+                </label>
+                <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
+                  <span>Demo:</span>
+                  <button
+                    type="button"
+                    onClick={() => setGithubUsername("alex-chen-dev")}
+                    className="text-[#2F6FED] hover:underline"
+                  >
+                    alex-chen-dev
+                  </button>
+                  <span>•</span>
+                  <button
+                    type="button"
+                    onClick={() => setGithubUsername("priya-backend-eng")}
+                    className="text-[#2F6FED] hover:underline"
+                  >
+                    priya-backend-eng
+                  </button>
+                </div>
+              </div>
+              <div className="relative">
+                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 font-mono text-sm">
+                  @
+                </span>
+                <input
+                  type="text"
+                  value={githubUsername}
+                  onChange={(e) => setGithubUsername(e.target.value)}
+                  placeholder="e.g. alex-chen-dev or gaearon"
+                  className="w-full pl-8 pr-4 py-2.5 text-sm text-[#16233C] dark:text-white bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 focus:border-[#2F6FED] focus:ring-2 focus:ring-blue-100 dark:focus:ring-blue-900/40 rounded-xl transition-all shadow-2xs font-mono"
+                />
+              </div>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                After the interview, Viora matches your spoken answers with your GitHub repositories to classify skills as Proven, Partial, or Claimed-only.
+              </p>
             </div>
 
             <div className="space-y-2">
               <label className="block text-xs font-bold uppercase tracking-wider text-[#0B1A33] dark:text-slate-200">
-                Interview Round / Sub-Mode (Pick One)
+                3. Interview Round / Sub-Mode (Pick One)
               </label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 {[

@@ -13,6 +13,11 @@ import {
   Activity,
   Maximize,
   Compass,
+  Clock,
+  Play,
+  Pause,
+  RotateCcw,
+  AlertTriangle,
 } from "lucide-react";
 import { QuestionItem } from "../types";
 import {
@@ -73,10 +78,15 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
   } | null>(null);
   const [isEvaluating, setIsEvaluating] = useState(false);
 
+  // Visual Countdown Timer State (default: 120s for interview, 90s for viva)
+  const [timerDuration, setTimerDuration] = useState<number>(mode === "interview" ? 120 : 90);
+  const [timeLeft, setTimeLeft] = useState<number>(mode === "interview" ? 120 : 90);
+  const [isTimerPaused, setIsTimerPaused] = useState<boolean>(false);
+
   const recognizerRef = useRef<VoiceRecognizerController | null>(null);
   const recognitionSupported = isSpeechRecognitionSupported();
 
-  // Reset states when question changes
+  // Reset states and timer when question changes
   useEffect(() => {
     setAnswerText("");
     setInterimPreview("");
@@ -84,6 +94,8 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
     setAnsweredByVoice(false);
     stopSpeaking();
     setIsSpeakingQuestion(false);
+    setTimeLeft(timerDuration);
+    setIsTimerPaused(false);
 
     if (recognizerRef.current) {
       try {
@@ -100,7 +112,24 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
         } catch (e) {}
       }
     };
-  }, [question.id]);
+  }, [question.id, timerDuration]);
+
+  // Active Countdown Timer Effect
+  useEffect(() => {
+    if (timerDuration <= 0 || isTimerPaused || isSubmitting) return;
+
+    const interval = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [question.id, timerDuration, isTimerPaused, isSubmitting]);
 
   const handleToggleSpeak = () => {
     if (isSpeakingQuestion) {
@@ -211,6 +240,15 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
   const progressPercent = Math.round(((currentIndex + 1) / totalQuestions) * 100);
   const isLastQuestion = currentIndex === totalQuestions - 1;
 
+  // Visual Timer Formatting
+  const minutes = Math.floor(timeLeft / 60);
+  const seconds = timeLeft % 60;
+  const formattedTime = `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+  const timerPercent = timerDuration > 0 ? (timeLeft / timerDuration) * 100 : 100;
+  const isWarning = timeLeft <= 30 && timeLeft > 10 && timerDuration > 0;
+  const isCritical = timeLeft <= 10 && timeLeft > 0 && timerDuration > 0;
+  const isTimeUp = timeLeft === 0 && timerDuration > 0;
+
   // Icon for category
   const getCategoryIcon = (category?: string) => {
     switch (category) {
@@ -228,8 +266,8 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
   return (
     <div className="bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 rounded-2xl shadow-sm p-5 sm:p-8 space-y-6">
       {/* Header & Progress */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between text-xs font-semibold text-slate-500 dark:text-slate-400">
+      <div className="space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-semibold text-slate-500 dark:text-slate-400">
           <div className="flex items-center gap-2">
             <span className="uppercase tracking-wider text-[#2F6FED] dark:text-blue-400 font-bold">
               {mode === "viva" ? "Viva Voce" : `Interview • ${subMode || "Technical"}`}
@@ -238,8 +276,99 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
             <span>
               Question {currentIndex + 1} of {totalQuestions}
             </span>
+            <span>•</span>
+            <span className="font-mono text-slate-600 dark:text-slate-400">{progressPercent}% complete</span>
           </div>
-          <span className="font-mono text-slate-600 dark:text-slate-400">{progressPercent}% complete</span>
+
+          {/* Visual Countdown Timer Widget */}
+          <div className="flex items-center gap-2.5">
+            {timerDuration > 0 ? (
+              <div
+                className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border transition-all ${
+                  isCritical
+                    ? "bg-red-50 dark:bg-red-950/70 border-red-300 dark:border-red-700 text-red-600 dark:text-red-400 animate-pulse shadow-xs"
+                    : isWarning
+                    ? "bg-amber-50 dark:bg-amber-950/70 border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-300 shadow-2xs"
+                    : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 shadow-2xs"
+                }`}
+                title="Time remaining for this question"
+              >
+                {/* Circular timer ring indicator */}
+                <div className="relative w-4 h-4 flex items-center justify-center shrink-0">
+                  <svg className="w-full h-full -rotate-90" viewBox="0 0 36 36">
+                    <path
+                      className="text-slate-200 dark:text-slate-700"
+                      strokeWidth="4"
+                      stroke="currentColor"
+                      fill="none"
+                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                    />
+                    <path
+                      className={`${
+                        isCritical
+                          ? "text-red-500"
+                          : isWarning
+                          ? "text-amber-500"
+                          : "text-[#2F6FED] dark:text-blue-400"
+                      } transition-all duration-1000 ease-linear`}
+                      strokeDasharray={`${timerPercent}, 100`}
+                      strokeWidth="4"
+                      strokeLinecap="round"
+                      stroke="currentColor"
+                      fill="none"
+                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                    />
+                  </svg>
+                </div>
+
+                <span className="font-mono text-xs font-bold tracking-wider">
+                  {formattedTime}
+                </span>
+
+                <div className="flex items-center gap-1 pl-1 border-l border-slate-200 dark:border-slate-700">
+                  <button
+                    type="button"
+                    onClick={() => setIsTimerPaused(!isTimerPaused)}
+                    className="p-0.5 hover:text-blue-600 rounded transition-colors"
+                    title={isTimerPaused ? "Resume Timer" : "Pause Timer"}
+                  >
+                    {isTimerPaused ? (
+                      <Play className="w-3 h-3 text-emerald-600" />
+                    ) : (
+                      <Pause className="w-3 h-3 text-slate-500" />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTimeLeft(timerDuration);
+                      setIsTimerPaused(false);
+                    }}
+                    className="p-0.5 hover:text-blue-600 rounded transition-colors"
+                    title="Reset Question Timer"
+                  >
+                    <RotateCcw className="w-3 h-3 text-slate-400" />
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <span className="text-[11px] text-slate-400 font-medium">Timer Off</span>
+            )}
+
+            {/* Duration Selector */}
+            <select
+              value={timerDuration}
+              onChange={(e) => setTimerDuration(Number(e.target.value))}
+              className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 focus:outline-hidden"
+              title="Change time limit per question"
+            >
+              <option value={60}>60s limit</option>
+              <option value={90}>90s limit</option>
+              <option value={120}>2 min limit</option>
+              <option value={180}>3 min limit</option>
+              <option value={0}>No Timer</option>
+            </select>
+          </div>
         </div>
 
         {/* Progress Bar */}
@@ -249,6 +378,14 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
             style={{ width: `${progressPercent}%` }}
           />
         </div>
+
+        {/* Time's up warning banner */}
+        {isTimeUp && (
+          <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 flex items-center gap-2 text-xs font-semibold text-amber-800 dark:text-amber-300 animate-in fade-in duration-200">
+            <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
+            <span>Time's up for this question! Conclude your key takeaway and submit your answer.</span>
+          </div>
+        )}
       </div>
 
       {/* Question Grounding Badge & Fresh Questions Option */}
