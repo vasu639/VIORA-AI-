@@ -1,6 +1,6 @@
 {
   "name": "Viora AI",
-  "description": "AI-powered viva and interview oral examination practice tool grounded in your uploaded syllabus or resume.",
+  "description": "Evidence-based learning coach that verifies claimed skills against real GitHub work and creates practical portfolio micro-tasks.",
   "requestFramePermissions": [
     "camera",
     "microphone"

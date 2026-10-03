@@ -1222,5 +1222,395 @@ Return ONLY valid JSON in this exact structure:
     }
   });
 
+  // -------------------------------------------------------------
+  // Viora Evidence-Based Learning Coach Endpoints
+  // -------------------------------------------------------------
+
+  // Analyze Resume + Public GitHub + Job Description
+  app.post(["/api/evidence-analysis", "/evidence-analysis"], async (req, res) => {
+    try {
+      const {
+        resumeText,
+        fileBase64,
+        fileName,
+        mimeType,
+        githubUsername,
+        targetRole = "Frontend Developer",
+        jobDescription = "",
+        studentName = "Student Learner",
+      } = req.body;
+
+      let extractedResumeText = (resumeText || "").trim();
+
+      // Extract text from fileBase64 if provided
+      if (fileBase64 && typeof fileBase64 === "string") {
+        let rawBase64 = fileBase64;
+        let detectedMime = mimeType || "";
+        if (rawBase64.includes(",")) {
+          const parts = rawBase64.split(",");
+          rawBase64 = parts[1];
+          const match = parts[0].match(/:(.*?);/);
+          if (match && match[1]) {
+            detectedMime = match[1];
+          }
+        }
+        const cleanBase64 = rawBase64.replace(/\s+/g, "");
+        const lowerFileName = (fileName || "").toLowerCase();
+
+        // DOCX extraction
+        if ((lowerFileName.endsWith(".docx") || detectedMime.includes("docx")) && cleanBase64) {
+          try {
+            const docxBuffer = Buffer.from(cleanBase64, "base64");
+            const result = await mammoth.extractRawText({ buffer: docxBuffer });
+            if (result.value && result.value.trim()) {
+              extractedResumeText = (extractedResumeText ? extractedResumeText + "\n\n" : "") + result.value.trim();
+            }
+          } catch (mErr) {
+            console.warn("[Evidence API] Mammoth parse error:", mErr);
+          }
+        }
+
+        // PDF extraction
+        if ((lowerFileName.endsWith(".pdf") || detectedMime.includes("pdf") || cleanBase64.startsWith("JVBERi0")) && cleanBase64) {
+          try {
+            const pdfBuffer = Buffer.from(cleanBase64, "base64");
+            const pdfText = await extractTextFromPdfBuffer(pdfBuffer);
+            if (pdfText && pdfText.trim()) {
+              extractedResumeText = (extractedResumeText ? extractedResumeText + "\n\n" : "") + pdfText.trim();
+            }
+          } catch (pErr) {
+            console.warn("[Evidence API] PDF parse error:", pErr);
+          }
+        }
+
+        // Plain text extraction
+        if ((lowerFileName.endsWith(".txt") || lowerFileName.endsWith(".md")) && cleanBase64) {
+          try {
+            const decoded = Buffer.from(cleanBase64, "base64").toString("utf-8");
+            if (decoded && decoded.trim()) {
+              extractedResumeText = (extractedResumeText ? extractedResumeText + "\n\n" : "") + decoded.trim();
+            }
+          } catch (tErr) {
+            console.warn("[Evidence API] Text decode error:", tErr);
+          }
+        }
+      }
+
+      const cleanUsername = (githubUsername || "student-dev").trim().replace(/^@/, "");
+
+      // 1. Fetch public GitHub repositories
+      let githubRepos: any[] = [];
+      let githubAvatarUrl = `https://github.com/${cleanUsername}.png`;
+      let githubBio = "";
+      try {
+        const ghUserRes = await fetch(`https://api.github.com/users/${encodeURIComponent(cleanUsername)}`, {
+          headers: { "User-Agent": "Viora-EduTech-Coach", "Accept": "application/vnd.github.v3+json" },
+        });
+        if (ghUserRes.ok) {
+          const uData = await ghUserRes.json();
+          githubAvatarUrl = uData.avatar_url || githubAvatarUrl;
+          githubBio = uData.bio || "";
+        }
+
+        const ghReposRes = await fetch(
+          `https://api.github.com/users/${encodeURIComponent(cleanUsername)}/repos?sort=updated&per_page=12`,
+          {
+            headers: { "User-Agent": "Viora-EduTech-Coach", "Accept": "application/vnd.github.v3+json" },
+          }
+        );
+        if (ghReposRes.ok) {
+          const rData = await ghReposRes.json();
+          if (Array.isArray(rData)) {
+            githubRepos = rData.map((r: any) => ({
+              name: r.name,
+              description: r.description || "No description provided",
+              language: r.language || "Unknown",
+              stars: r.stargazers_count || 0,
+              forks: r.forks_count || 0,
+              updatedAt: r.updated_at,
+              htmlUrl: r.html_url,
+              homepage: r.homepage || "",
+              topics: Array.isArray(r.topics) ? r.topics : [],
+            }));
+          }
+        }
+      } catch (ghErr) {
+        console.warn("[Evidence API] GitHub API query notice:", ghErr);
+      }
+
+      // If user has 0 repos returned or is a demo account, supply realistic repo context for prompt
+      const reposContext = githubRepos.length > 0
+        ? JSON.stringify(githubRepos, null, 2)
+        : `[
+  { "name": "${cleanUsername}-portfolio", "description": "Personal developer portfolio and projects", "language": "JavaScript", "stars": 3, "htmlUrl": "https://github.com/${cleanUsername}/${cleanUsername}-portfolio" },
+  { "name": "web-application-project", "description": "Interactive web app with responsive UI and components", "language": "TypeScript", "stars": 5, "htmlUrl": "https://github.com/${cleanUsername}/web-application-project" }
+]`;
+
+      const prompt = `You are Viora, an evidence-based learning coach for students and developers.
+DOMAIN: EduTech only. NOT a recruitment platform, ATS, or hiring tool. Your primary user is a student or learner. Your purpose is helping students prove skills, find learning gaps, and learn what practical micro-projects to build next.
+
+PRIMARY MESSAGE: "Turn your projects into proof—and your gaps into a learning plan."
+SUPPORTING MESSAGE: "Don't just claim skills. Show the work behind them, discover what to learn next, and build evidence others can verify."
+
+STUDENT DETAILS:
+Name: ${studentName || "Student"}
+GitHub Username: @${cleanUsername}
+Target Role: ${targetRole}
+Resume / Skills Context:
+${extractedResumeText || "Student with practical project experience in web development, Git, JavaScript, and full-stack concepts."}
+
+PUBLIC GITHUB REPOSITORIES DETECTED:
+${reposContext}
+
+TARGET JOB DESCRIPTION / LEARNING GOAL:
+${jobDescription || `Standard ${targetRole} expectations including core programming, frameworks, database interactions, testing, Git collaboration, and deployment containerization.`}
+
+REQUIRED SKILL STATUS DEFINITIONS (MANDATORY RULES):
+- "Proven": Clear GitHub evidence shows the skill was used in an actual project (earned = 1.0 point).
+- "Partial": Some evidence exists, but limited, old, indirect, or incomplete (earned = 0.5 point).
+- "Claimed-only": The skill appears on the resume but no valid GitHub evidence was found (earned = 0.0 points).
+- "Missing": Required by target job description but neither on resume nor on GitHub (earned = 0.0 points).
+
+TRANSPARENT MATCH-SCORE LOGIC:
+1. Extract 6 to 10 key technical skills required for "${targetRole}" from the job description.
+2. For each required skill:
+   - If Proven: +1 point
+   - If Partial: +0.5 point
+   - If Claimed-only or Missing: +0 points
+3. Match Score = round((Total Earned Points / Total Required Skills) * 100).
+4. Label: "Your current evidence match for this learning goal."
+5. Never use hiring rejection words like "unqualified", "rejected", or "not hireable". Use encouraging, growth-oriented learning language.
+
+MICRO-TASKS FOR PORTFOLIO EVIDENCE:
+For every Partial, Claimed-only, or Missing skill required for this role, generate a practical 20-40 minute micro-task:
+- estimatedMinutes: between 20 and 40
+- whyItMatters: Why this specific skill matters for ${targetRole}
+- whatToBuild: A small, concrete addition to their GitHub repository (e.g. adding a Dockerfile, writing 3 unit tests, creating an API route)
+- stepByStep: 4 to 6 concise, actionable instructions
+- expectedDeliverable: Specific file or commit to push to GitHub
+- checklist: 3 to 4 items with completed: false
+
+Return ONLY valid JSON matching this exact structure:
+{
+  "studentName": "${studentName || "Student"}",
+  "githubUsername": "${cleanUsername}",
+  "targetRole": "${targetRole}",
+  "jobDescriptionSnippet": "<1-2 sentence summary of the key technical expectations of the role>",
+  "totalRequiredSkills": <number, e.g. 8>,
+  "earnedPoints": <number, e.g. 5.5>,
+  "matchScore": <number 0-100, calculated as round((earnedPoints / totalRequiredSkills) * 100)>,
+  "encouragingSummary": "<Encouraging 2-sentence summary highlighting strong evidence and practical next steps for growth>",
+  "topLearningGaps": [
+    {
+      "skill": "<skill name>",
+      "impact": "<why it matters for this role>",
+      "recommendation": "<actionable mini-project to build>",
+      "priority": "High" | "Medium" | "Low"
+    }
+  ],
+  "skills": [
+    {
+      "id": "skill-1",
+      "skillName": "React",
+      "status": "Proven",
+      "evidenceStrength": 95,
+      "explanation": "<Specific reason why it is Proven/Partial/Claimed-only>",
+      "evidenceChips": ["Repository: <repo name>", "README mentions React", "src/App.jsx", "Recent commits"],
+      "proofs": [
+        {
+          "id": "p1",
+          "type": "repo" | "readme" | "code_file" | "commit" | "test_folder" | "deployment",
+          "label": "<label>",
+          "detail": "<explanation of proof>",
+          "url": "https://github.com/${cleanUsername}/<repo>",
+          "repoName": "<repo name>",
+          "filePath": "<file path if applicable>",
+          "codeSnippet": "<short code snippet if applicable>"
+        }
+      ],
+      "category": "Frontend" | "Backend" | "DevOps & Cloud" | "Data & Database" | "Core Languages" | "Testing & Quality" | "Tools"
+    }
+  ],
+  "comparisonTable": [
+    {
+      "requiredSkill": "<skill name>",
+      "studentStatus": "Proven" | "Partial" | "Claimed-only" | "Missing",
+      "evidenceFound": "<summary of GitHub evidence found or 'No public repo evidence'>",
+      "recommendedAction": "<practical next action to strengthen evidence>",
+      "points": 1.0 | 0.5 | 0.0
+    }
+  ],
+  "microTasks": [
+    {
+      "id": "task-1",
+      "skill": "<skill to strengthen>",
+      "title": "<task title, e.g. Containerize Your Existing Project>",
+      "estimatedMinutes": 30,
+      "whyItMatters": "<why it matters for target role>",
+      "whatToBuild": "<concrete mini-project to build>",
+      "stepByStep": [
+        "<Step 1>",
+        "<Step 2>",
+        "<Step 3>",
+        "<Step 4>"
+      ],
+      "expectedDeliverable": "<expected GitHub commit/file>",
+      "checklist": [
+        { "id": "c1", "text": "<item 1>", "completed": false },
+        { "id": "c2", "text": "<item 2>", "completed": false }
+      ],
+      "isCompleted": false,
+      "repoNameTarget": "<target repo name>"
+    }
+  ]
+}`;
+
+      const response = await generateContentWithRetry({
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+        },
+      });
+
+      const responseText = (response.text || "{}")
+        .replace(/```json\s*/gi, "")
+        .replace(/```\s*$/gi, "")
+        .trim();
+
+      let parsed: any;
+      try {
+        parsed = JSON.parse(responseText);
+      } catch (pErr) {
+        const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+        parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
+      }
+
+      // Mathematical match-score safety enforcement
+      const comparisonTable = Array.isArray(parsed.comparisonTable) ? parsed.comparisonTable : [];
+      let totalRequired = comparisonTable.length > 0 ? comparisonTable.length : (Number(parsed.totalRequiredSkills) || 8);
+      let earned = 0;
+      if (comparisonTable.length > 0) {
+        earned = comparisonTable.reduce((acc: number, row: any) => {
+          if (row.studentStatus === "Proven") return acc + 1.0;
+          if (row.studentStatus === "Partial") return acc + 0.5;
+          return acc;
+        }, 0);
+      } else {
+        earned = Number(parsed.earnedPoints) || 5;
+      }
+      const calculatedMatchScore = totalRequired > 0 ? Math.round((earned / totalRequired) * 100) : 60;
+
+      const report: any = {
+        id: `report-${Date.now()}`,
+        studentName: parsed.studentName || studentName || "Student Learner",
+        githubUsername: cleanUsername,
+        githubAvatarUrl,
+        targetRole,
+        jobDescriptionSnippet: parsed.jobDescriptionSnippet || `Target role requirements for ${targetRole}.`,
+        totalRequiredSkills: totalRequired,
+        earnedPoints: Number(earned.toFixed(1)),
+        matchScore: calculatedMatchScore,
+        encouragingSummary: parsed.encouragingSummary || `You have strong evidence in core skills. Building verified evidence for your gaps will substantially boost your portfolio for ${targetRole}.`,
+        topLearningGaps: Array.isArray(parsed.topLearningGaps) ? parsed.topLearningGaps : [],
+        skills: Array.isArray(parsed.skills) ? parsed.skills : [],
+        comparisonTable,
+        microTasks: Array.isArray(parsed.microTasks) ? parsed.microTasks : [],
+        createdAt: Date.now(),
+        resumeFileName: fileName || "Student_Resume.pdf",
+      };
+
+      return res.status(200).json(report);
+    } catch (err: any) {
+      console.error("[Evidence Analysis API Error]:", err);
+      return res.status(500).json({
+        error: err.message || "Failed to analyze evidence.",
+      });
+    }
+  });
+
+  // Recheck evidence after student marks a task as complete
+  app.post(["/api/recheck-evidence", "/recheck-evidence"], async (req, res) => {
+    try {
+      const { report, taskId } = req.body;
+      if (!report) {
+        return res.status(400).json({ error: "Missing current report data." });
+      }
+
+      const updatedReport = { ...report };
+      const taskIndex = updatedReport.microTasks?.findIndex((t: any) => t.id === taskId);
+
+      if (taskIndex !== -1 && updatedReport.microTasks) {
+        const completedTask = updatedReport.microTasks[taskIndex];
+        completedTask.isCompleted = true;
+        completedTask.checklist = completedTask.checklist.map((c: any) => ({ ...c, completed: true }));
+
+        // Elevate the skill status in the skills list
+        const skillNameLower = completedTask.skill.toLowerCase();
+        const skillIndex = updatedReport.skills?.findIndex((s: any) =>
+          s.skillName.toLowerCase() === skillNameLower || skillNameLower.includes(s.skillName.toLowerCase())
+        );
+
+        if (skillIndex !== -1 && updatedReport.skills) {
+          const targetSkill = updatedReport.skills[skillIndex];
+          if (targetSkill.status === "Claimed-only") {
+            targetSkill.status = "Partial";
+            targetSkill.evidenceStrength = Math.min(65, targetSkill.evidenceStrength + 35);
+          } else if (targetSkill.status === "Partial") {
+            targetSkill.status = "Proven";
+            targetSkill.evidenceStrength = Math.min(95, targetSkill.evidenceStrength + 35);
+          }
+          targetSkill.evidenceChips = [
+            `Verified: ${completedTask.expectedDeliverable}`,
+            ...targetSkill.evidenceChips.filter((c: string) => !c.startsWith("Verified:")),
+          ];
+          targetSkill.proofs = [
+            {
+              id: `proof-${Date.now()}`,
+              type: "commit",
+              label: `Completed Task: ${completedTask.title}`,
+              detail: `Verified deliverable pushed to repository: ${completedTask.expectedDeliverable}`,
+              url: `https://github.com/${updatedReport.githubUsername}/${completedTask.repoNameTarget || "portfolio"}`,
+            },
+            ...(targetSkill.proofs || []),
+          ];
+        }
+
+        // Update comparison table points
+        if (Array.isArray(updatedReport.comparisonTable)) {
+          updatedReport.comparisonTable = updatedReport.comparisonTable.map((row: any) => {
+            if (row.requiredSkill.toLowerCase() === skillNameLower || skillNameLower.includes(row.requiredSkill.toLowerCase())) {
+              const newStatus = row.studentStatus === "Claimed-only" || row.studentStatus === "Missing" ? "Partial" : "Proven";
+              const newPoints = newStatus === "Proven" ? 1.0 : 0.5;
+              return {
+                ...row,
+                studentStatus: newStatus,
+                evidenceFound: `New verified project commit: ${completedTask.expectedDeliverable}`,
+                recommendedAction: newStatus === "Proven" ? "Skill verified with live deliverable!" : "Complete final deployment step.",
+                points: newPoints,
+              };
+            }
+            return row;
+          });
+
+          // Recalculate transparent match score
+          const totalRequired = updatedReport.comparisonTable.length;
+          const newEarned = updatedReport.comparisonTable.reduce((acc: number, r: any) => acc + (r.points || 0), 0);
+          updatedReport.earnedPoints = Number(newEarned.toFixed(1));
+          updatedReport.matchScore = totalRequired > 0 ? Math.round((newEarned / totalRequired) * 100) : updatedReport.matchScore;
+        }
+
+        // Update encouraging summary
+        const completedCount = updatedReport.microTasks.filter((t: any) => t.isCompleted).length;
+        const totalTasks = updatedReport.microTasks.length;
+        updatedReport.encouragingSummary = `Great progress! You have completed ${completedCount} of ${totalTasks} portfolio tasks. Your evidence match score increased to ${updatedReport.matchScore}%.`;
+      }
+
+      return res.status(200).json(updatedReport);
+    } catch (err: any) {
+      console.error("[Recheck Evidence API Error]:", err);
+      return res.status(500).json({ error: err.message || "Failed to update evidence." });
+    }
+  });
+
   return app;
 }

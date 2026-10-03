@@ -55,8 +55,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                 onClick={() => onSelectMode("interview")}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all text-slate-700 dark:text-slate-200 hover:bg-white dark:hover:bg-slate-800 hover:shadow-xs"
               >
-                <UserCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                Interview Practice
+                <UserCheck className="w-3.5 h-3.5 text-[#2F6FED]" />
+                Evidence Coach
               </button>
             </div>
           )}
